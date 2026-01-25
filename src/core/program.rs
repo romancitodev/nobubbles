@@ -25,7 +25,18 @@ enum Internal<M> {
 /// Builder for configuring a Program before running it.
 ///
 /// ```
-/// let program = ProgramBuilder::new(my_model)
+/// # use nobubbles::core::{Model, ProgramBuilder};
+/// struct MyModel;
+/// impl Model for MyModel {
+///     type Message = ();
+///     type Output = String;
+///     fn event(&self, _ev: crossterm::event::Event) -> Option<Self::Message> { None }
+///     fn update(&mut self, _msg: Self::Message) -> nobubbles::core::Command<Self::Message> {
+///         nobubbles::core::Command::none()
+///     }
+///     fn view(&self) -> Self::Output { "Hello, World!".to_string() }
+/// }
+/// let program = ProgramBuilder::new(MyModel)
 ///     .with_fps(60)
 ///     .with_alt_screen(true)
 ///     .build();
