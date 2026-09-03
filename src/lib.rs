@@ -41,4 +41,5 @@
 
 pub mod components;
 pub mod core;
+pub(crate) mod render;
 pub mod signals;
