@@ -29,7 +29,62 @@ que no se puede reconstruir leyendo el código.
 
 ---
 
-## 2026-09-03 — Fase 1: signals
+## 2026-09-03 (b) — Fase 2: renderer
+
+**Hecho:**
+- `src/render.rs`: `inline`/`fullscreen` genéricos sobre `Backend`, `pub(crate)`
+  (D-004, no se exponen tipos de ratatui). `enter_fullscreen`/`leave_fullscreen`
+  con raw mode + alt screen para el caso real (`CrosstermBackend<Stdout>`).
+- 4 tests con `TestBackend`, sin terminal real: altura fija del inline, área
+  completa del fullscreen, crecer/encoger recreando el `Terminal`, e
+  `insert_before` sin romper el scrollback de arriba.
+- D-006 confirmada: `Component` con `&self`.
+- `ratatui` agregado con `default-features = false, features = ["crossterm"]`
+  únicamente — nada de `all-widgets` ni el resto.
+
+**Aprendido:**
+- `Viewport::Inline(height)` es una altura fija desde la construcción.
+  `Terminal::resize` existe, pero para inline usa el `height` que ya estaba
+  guardado en `self.viewport`, no uno nuevo. `autoresize` sólo reacciona a que
+  cambió el tamaño de la ventana de la terminal, no a que la vista quiere más o
+  menos líneas. La única forma de crecer/encoger es recrear el `Terminal`
+  entero con un `Viewport::Inline` nuevo — para `CrosstermBackend<Stdout>` es
+  gratis porque `Stdout` es sólo un handle, no arrastra estado.
+- `Terminal` no da forma de recuperar el backend que se le pasó por valor (sin
+  `into_inner` ni nada similar) — confirmado grepeando el crate entero. No
+  importa para el caso real, pero condiciona cómo se testea con `TestBackend`
+  (no se puede encadenar dos `Terminal` sobre el mismo backend).
+- Trampa real: `Frame::area()` (adentro del closure de `draw`) y el campo
+  `area` del `CompletedFrame` que devuelve `draw()` **no son lo mismo** —
+  el primero es el viewport, el segundo es `last_known_area` (el tamaño entero
+  del backend). Incluso con el nombre repetido, hay que leer el height desde
+  adentro del closure.
+- `ratatui-core` es para autores de widgets, no para apps — la propia doc del
+  crate lo dice. La facade `ratatui` re-exporta `Terminal`/`Viewport`/etc. tal
+  cual, así que bajar a `ratatui-core` no gana nada.
+
+**Callejones sin salida:**
+- `cargo add ratatui -F scrolling-regions` rompe la resolución: `ratatui
+  v0.30.2` pide `ratatui-termwiz = "^0.1.2"`, que no existe publicado en
+  crates.io (sólo `0.1.0`). Pasa aunque no actives el feature `termwiz`, porque
+  Cargo igual resuelve la versión de todo dependency opcional declarado. Se
+  revirtió a `features = ["crossterm"]` solo.
+
+**Abierto:**
+- `enter_fullscreen`/`leave_fullscreen` sin guard de panic — si algo panickea
+  entre medio, la terminal del usuario queda en raw mode + alt screen. Se
+  resuelve con un guard `Drop` o panic hook cuando exista el loop de Fase 3, no
+  antes.
+- Pulido menor de `signals.rs` (Fase 1) sigue sin tocar: ver LOG del
+  2026-09-03 (a).
+
+**Siguiente:**
+- Fase 3: borrar ELM (D-009), `trait Component` con `&self` (D-006), loop
+  nuevo.
+
+---
+
+## 2026-09-03 (a) — Fase 1: signals
 
 **Hecho:**
 - `src/signals.rs` completo: arena thread-local, `Signal`/`ReadSignal`/`WriteSignal`

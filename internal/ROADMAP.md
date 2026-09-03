@@ -7,11 +7,13 @@ mensajes, y con modo inline (cliclack) como ciudadano de primera.
 
 ## Estado
 
-**Fase 1 lista.** `src/signals.rs`: arena thread-local, signals `Copy`, split
-read/write, y guards RAII que prenden el dirty al dropearse. 8 tests en verde y
-Miri limpio sobre los dos `unsafe`.
+**Fase 2 lista.** `src/render.rs`: constructores `inline`/`fullscreen`
+genéricos sobre `Backend` (testeados con `TestBackend`, sin terminal real), más
+`enter_fullscreen`/`leave_fullscreen` para el caso real con crossterm. 4 tests
+en verde: altura fija del inline, área completa del fullscreen, crecer/encoger
+recreando el `Terminal`, e `insert_before` sin romper el scrollback.
 
-Falta pulido menor, anotado abajo. **Siguiente: Fase 2, renderer.**
+D-006 confirmada. **Siguiente: Fase 3 (Component + loop nuevo).**
 
 ---
 
@@ -69,14 +71,16 @@ Fase 6 — ver D-010.
 Se puede manejar con una vista hardcodeada. Todavía no hace falta ni loop ni
 `Component`.
 
-- [ ] ratatui como dependencia **interna**, no expuesta en la API pública.
-- [ ] Dos modos: viewport inline y alt screen.
-- [ ] En inline: medir la altura que pide la vista y crecer/encoger.
-- [ ] `Terminal::insert_before` para empujar líneas al scrollback (es lo que
+- [x] ratatui como dependencia **interna**, no expuesta en la API pública.
+- [x] Dos modos: viewport inline y alt screen.
+- [x] En inline: medir la altura que pide la vista y crecer/encoger.
+- [x] `Terminal::insert_before` para empujar líneas al scrollback (es lo que
       deja el transcript de los prompts al salir).
 
 **Listo cuando:** un contador inline que crece de 1 a 5 líneas y vuelve a 1 sin
-romper el scrollback de arriba.
+romper el scrollback de arriba. Verificado con tests (`TestBackend`, sin
+terminal real) en vez de un demo visual — no hay loop todavía que lo dibuje de
+verdad, eso es Fase 3.
 
 **Investigar:** `TerminalOptions` con `Viewport::Inline(u16)`, y
 `Terminal::insert_before`. Es la parte de ratatui menos documentada — leer el

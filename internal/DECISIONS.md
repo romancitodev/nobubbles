@@ -90,7 +90,7 @@ corre hasta completarse. Un solo loop, tres caras.
 
 ## D-006 — `Component` con `&self`, no `&mut self`
 
-**Estado:** PROPUESTA — falta confirmar · 2026-09-02
+**Estado:** aceptada · propuesta 2026-09-02, confirmada 2026-09-03
 
 ```rust
 pub trait Component {
@@ -108,8 +108,8 @@ checker, que son la razón por la que hacer TUI en Rust es miserable hoy.
 **Costo:** todo lo mutable tiene que ser signal. Para `Input` eso es
 `Signal<String>` + `Signal<usize>`.
 
-**Pendiente:** es la pieza de la que cuelga todo lo demás y la que menos se puede
-cambiar después. Confirmar antes de la Fase 3.
+Es la pieza de la que cuelga todo lo demás y la que menos se puede cambiar
+después, así que se confirmó antes de arrancar la Fase 3, sin objeciones.
 
 ---
 
