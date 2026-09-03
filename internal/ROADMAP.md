@@ -93,23 +93,44 @@ ejemplo `inline.rs` del repo.
 Acá se borra ELM. El loop no se escribe de cero: se le cambian las líneas del
 medio al que quedó del WIP.
 
-- [ ] Borrar `Model`, `Command`, `Internal`, `QuitHandle`, `components/*`, los
+- [x] Borrar `Model`, `Command`, `Internal`, `QuitHandle`, `components/*`, los
       dos ejemplos.
-- [ ] `trait Component` con `view(&self) -> impl Render` y `on_key(&self, k) -> Handled`
-- [ ] `Handled::{Yes, No, Quit}`
-- [ ] Dispatch: hijo enfocado primero, después burbujea al padre.
-- [ ] Registro de foco en contexto, Tab cicla.
+- [x] `engine.rs`: `poll_timeout(dirty, since_render, frame) -> Duration`,
+      función pura, 3 tests.
+- [x] `trait Component` con `view(&self) -> impl Render`, más `Render`/`Rect`/
+      `Buffer` como newtypes sobre ratatui (D-016). `src/components/mod.rs`.
+- [ ] `on_key(&self, k: Key) -> bool` en los widgets que lo necesiten — `true`
+      = consumido. Reemplaza `Handled` (D-015): ya no hay un valor de retorno
+      con semántica de "salir". Se agrega recién cuando `Input` (Fase 4) lo
+      necesite, no antes.
+- [x] `quit()` / `should_quit()` — flag global en el mismo `Runtime` de
+      `signals.rs`, al lado de `dirty`.
+- [x] `Inline::new(height, fps).run(|cx| ...)` — el entry point real (D-015),
+      `src/app.rs`. `Ctx::render`/`Ctx::key` dan lo que hace falta. Falta el
+      equivalente `Fullscreen`/`FullscreenApp` (mismo mecanismo sobre
+      `render::enter_fullscreen`/`leave_fullscreen`, todavía sin usar).
+- [ ] Dispatch/foco automático hacia un root queda pospuesto (D-015): lo
+      orquesta el closure del usuario, o un widget compuesto que lo resuelve
+      puertas adentro. Si hace falta volver a un dispatch automático, es
+      opt-in — no el único camino.
 - [ ] `Theme` global + structs `*Style` por componente.
 
-**Listo cuando:** un componente padre tiene un `Input` como campo, lee
-`self.input.value()`, y no existe ningún tipo `Message` en el ejemplo.
+**Listo cuando:** un ejemplo usa `App::inline().run(|cx| ...)`, compone un
+`Input` adentro leyendo `input.value()`, y no existe ningún tipo `Message` ni
+`Handled` en el ejemplo. **Cumplido** con `examples/counter.rs`: un
+`Component` con un `Signal<i32>`, corriendo de punta a punta en una terminal
+real (`Inline::run`, sin `Input` todavía porque eso es Fase 4 — un contador
+alcanza para probar la cadena completa).
 
 ### La forma del loop
 
 Lo que cambia respecto del WIP: hoy el loop prende `dirty` a mano después de
 `update()`. En reactivo no lo prende nadie a mano — lo prendió la escritura al
-signal, y `on_key` sólo devuelve si consumió la tecla o si hay que salir. El
-resto del esqueleto es idéntico.
+signal. Lo que cambia respecto de la versión anterior de este mismo esqueleto:
+salir ya no es un `Handled::Quit` que hay que bubblear desde `on_key` — es
+`is_quitting()`, el mismo tipo de flag que `dirty` (D-015). Y en vez de
+`render(&root)`, el redibujado corre el closure que el usuario le pasó a
+`.run()`.
 
     const IDLE: Duration = Duration::from_millis(250);
 
@@ -117,22 +138,20 @@ resto del esqueleto es idéntico.
     let mut last_render = Instant::now();
 
     loop {
-        let timeout = if dirty() {
-            frame.saturating_sub(last_render.elapsed())
-        } else {
-            IDLE
-        };
+        let timeout = poll_timeout(is_dirty(), last_render.elapsed(), frame);
 
         if event::poll(timeout)? {
             let ev = event::read()?;
             // filtro de KeyEventKind::Press acá
-            if let Handled::Quit = root.on_key(ev) { break; }
+            cx.set_event(ev); // lo que el closure del usuario puede leer
         }
 
-        while let Ok(f) = rx.try_recv() { f(); }   // efectos, Fase 6 — ver D-010
+        while let Ok(f) = rx.try_recv() { f(); }   // efectos, Fase 8 — ver D-010
 
-        if dirty() && last_render.elapsed() >= frame {
-            render(&root)?;
+        if is_quitting() { break; }
+
+        if is_dirty() && last_render.elapsed() >= frame {
+            terminal.draw(|frame| user_closure(&mut Cx::new(frame)))?;
             clear_dirty();
             last_render = Instant::now();
         }
@@ -158,7 +177,7 @@ pastosa, o quema CPU.
 
 ---
 
-## Fase 4 — Componentes
+## Fase 4 — Componentes de prompt
 
 - [ ] `Text`, `Input`, `Select`, `MultiSelect`, `Confirm`, `Spinner`, `Progress`
 - [ ] Cada uno con su `*Style` con las partes nombradas.
@@ -177,7 +196,51 @@ emoji con modificador de tono no se borra bien con un `pop()`.
 
 ---
 
-## Fase 6 — Efectos
+## Fase 6 — Fullscreen: App + widgets compuestos
+
+`App::fullscreen()` como entry point, y los widgets que IDEA.md pedía para la
+vista fullscreen y que ninguna fase anterior cubre: `List`, `Table`, `Tabs`,
+`Panel`.
+
+- [ ] `App::fullscreen()` — alt screen. El registro de foco con `Tab` se
+      construye acá, no antes: Fase 3 lo dejó pospuesto como opt-in (D-015).
+- [ ] `List`, `Table`, `Tabs`, `Panel` sobre el `Layout` de ratatui
+      (`Constraint::{Length, Percentage, Min, Fill}`). **No** se escribe un
+      sistema de layout propio — es el mismo concepto que el Row/Column/Fixed/Flex
+      de IDEA.md y ratatui ya lo resuelve.
+- [ ] Mouse: click y scroll. Si `on_key(&self, k: Key)` (D-006) no alcanza para
+      esto, generalizar a `on_event` antes de escribir el primer widget que lo
+      necesite, no después de tener cinco componentes atados a la firma vieja.
+
+**Listo cuando:** una vista con `List` + `Panel` responde a click de mouse y a
+`Tab`, sin tocar el motor de Fase 3.
+
+**Fuera de esta fase:** `Tree`, `Autocomplete`, `Forms`, `Animations`,
+`Theming`, `Accessibility` — el "recién después" de IDEA.md. Se agregan sólo
+si un caso real los pide.
+
+---
+
+## Fase 7 — Inline ↔ Fullscreen (la feature diferencial)
+
+Punto 12 de IDEA.md, "la feature estrella". D-005 ya separó `Inline` y `App`
+en tipos distintos que comparten el motor de Component + loop (Fase 3); acá se
+construye el handoff real entre uno y otro dentro del mismo proceso.
+
+- [ ] Terminar una tanda de prompts inline (Fase 5), dejar el transcript en
+      scrollback, y arrancar `App::fullscreen()` sin reinicializar la terminal
+      ni perder el estado que los prompts recolectaron.
+- [ ] El costo de habilitarlo tiene que ser llamar a `App::fullscreen()` después
+      del último `inline::*` — sin flag ni builder especial. Repetir ese error
+      es exactamente lo que D-005 ya descartó para Inline vs App.
+
+**Listo cuando:** un ejemplo corre 2-3 prompts inline (`Select`, `Confirm`) y al
+terminar entra a una vista fullscreen sin parpadeo ni reset visible de la
+terminal.
+
+---
+
+## Fase 8 — Efectos
 
 - [ ] Canal de closures `FnOnce() + Send` boxeadas, ejecutadas por el loop
       principal. La arena es thread-local, así que el thread de fondo **no
@@ -188,7 +251,7 @@ emoji con modificador de tono no se borra bien con un `pop()`.
 
 ---
 
-## Fase 7 — Split de crates
+## Fase 9 — Split de crates
 
 - [ ] `nobubbles-core` ← loop, signals, render, terminal
 - [ ] `nobubbles` ← facade + componentes + inline

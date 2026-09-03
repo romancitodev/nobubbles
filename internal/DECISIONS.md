@@ -111,6 +111,11 @@ checker, que son la razón por la que hacer TUI en Rust es miserable hoy.
 Es la pieza de la que cuelga todo lo demás y la que menos se puede cambiar
 después, así que se confirmó antes de arrancar la Fase 3, sin objeciones.
 
+**Pendiente:** la firma sólo cubre teclado. IDEA.md (punto 11) pide un input
+unificado con mouse y resize también. Si la Fase 6 (fullscreen) necesita click
+o scroll, generalizar `on_key` a algo como `on_event` ahí, temprano — no
+después de tener varios componentes ya atados a `on_key`.
+
 ---
 
 ## D-007 — Efectos con threads, sin runtime async
@@ -210,7 +215,7 @@ hasta que se borra.
 **Tensión que resuelve:** D-002 pone los signals en una arena `thread_local!`.
 D-007 dice que los efectos corren en `thread::spawn`. Un thread de fondo **no ve
 la arena**, así que no puede escribir un signal. Descubierto al reordenar el plan;
-condiciona la Fase 6 y hay que tenerlo escrito antes de llegar.
+condiciona la Fase 8 (Efectos) y hay que tenerlo escrito antes de llegar.
 
 **Resolución:** el canal no lleva valores para que alguien los aplique, lleva
 `Box<dyn FnOnce() + Send>`. El thread de fondo hace el trabajo, captura el
@@ -236,12 +241,12 @@ la operación más caliente del render.
 **Estado:** aceptada · 2026-09-02 (revierte lo que decía D-007)
 
 **Por qué:** decisión del autor. Gusta el manejo de buffers de compio y queda
-reservado como backend candidato para la Fase 6.
+reservado como backend candidato para la Fase 8 (Efectos).
 
 **Costo real:** tiempo de compilación y una entrada de más en `cargo tree`. Nada
 en runtime — no se linkea lo que no se llama. Aceptable.
 
-**Se revisa si:** llegamos a la Fase 6 y se elige otro backend, o si el tiempo de
+**Se revisa si:** llegamos a la Fase 8 y se elige otro backend, o si el tiempo de
 build empieza a molestar antes.
 
 ---
@@ -340,3 +345,104 @@ acotado a dos funciones. Si el módulo crece, se revisa.
 
 **Se revisa si:** aparece un tercer guard, o el invariante de orden deja de
 alcanzar.
+
+---
+
+## D-015 — `App::run(closure)` como entry point; `Component` no es la app
+
+**Estado:** aceptada · 2026-09-03
+
+**Contexto:** al planear la Fase 3, tres formas candidatas de entry point:
+`nobubbles::inline::run(app)`, `nobubbles::terminal::run(app)`, y
+`App::run(|cx| cx.render(...))`. Las dos primeras implican que el framework
+empuja eventos a un `Component` top-level que el usuario implementa. La
+tercera implica que el loop vive adentro de `.run()` pero la lógica de cada
+vuelta es un closure del usuario.
+
+**Por qué NO la primera forma:** si el framework maneja el dispatch hacia un
+`Component` raíz, `on_key` necesita un protocolo para decidir cuándo termina
+la app entera — de ahí salía `Handled::Quit`. Eso mezcla dos preguntas sin
+relación: "¿el hijo consumió la tecla?" (local, del dispatch) y "¿hay que
+salir?" (global, no depende de qué componente tenía foco). Un enum de tres
+variantes que carga ambas es el síntoma, no el problema.
+
+**Decisión:**
+1. El entry point es un closure sobre `App::run`, no un `Component` que el
+   framework maneja: `App::inline().run(|cx| ...)` / `App::fullscreen().run(|cx| ...)`.
+   Adentro, el usuario compone `Component`s (`Input`, `Select`, vistas propias)
+   y llama `cx.render(...)` para dibujarlos.
+2. `Component` (D-006) se queda para composición interna de widgets — no es
+   la interfaz que el usuario implementa para "ser la app".
+3. `quit` deja de ser una variante de `Handled`. Es un flag global igual a
+   `dirty` (D-003), mismo `Runtime` de `signals.rs`: `quit()` lo prende, el
+   loop lo lee. Nadie bubblea nada para salir.
+4. `on_key`, donde exista (widgets que lo necesiten), devuelve `bool`
+   ("consumido"), no `Handled`. `Handled::{Yes, No, Quit}` se descarta entero.
+
+**Costo:** el framework hace menos por vos. Ya no hay dispatch automático de
+teclas hacia un root `Component` — el usuario orquesta foco/bubbling desde el
+closure, salvo lo que un widget resuelva puertas adentro. Es exactamente lo
+que se pidió: controlar el evento de salida uno mismo, no que lo decida un
+valor de retorno bubbleado.
+
+**Se revisa si:** el closure-por-frame se siente repetitivo con árboles
+grandes y hace falta dispatch automático de vuelta. Ahí `Component` podría
+absorber ese rol, pero como opt-in — no como único camino, para no volver al
+problema que esta decisión resuelve.
+
+---
+
+## D-016 — `Render`, `Rect`, `Buffer` como newtypes propios sobre ratatui
+
+**Estado:** aceptada · 2026-09-03
+
+**Contexto:** el primer borrador de `Component::view` devolvía
+`impl ratatui::widgets::Widget` directamente. Contradice D-004: cualquiera que
+implemente `Component` tendría que importar ratatui, y su trait `Widget`
+quedaría en el contrato público — nobubbles pasa a ser un wrapper, no una
+dependencia interna reemplazable.
+
+**Decisión:** `Render`, `Rect` y `Buffer` son tipos propios que envuelven a
+los de ratatui, con conversiones en el borde:
+
+```rust
+pub struct Rect(ratatui::layout::Rect);
+pub struct Buffer(ratatui::buffer::Buffer);
+
+pub trait Render {
+    fn render(self, area: Rect, buf: &mut Buffer);
+}
+
+impl<W: ratatui::widgets::Widget> Render for W {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        ratatui::widgets::Widget::render(self, area.into(), buf.inner_mut());
+    }
+}
+```
+
+**Por qué el newtype y no el reexport plano** (que era mi recomendación por
+YAGNI): decisión explícita del autor — pagar la capa de conversión ahora a
+cambio de que ratatui no aparezca estructuralmente en ninguna firma pública.
+El día que se cambie de backend, el cambio queda contenido en esas
+conversiones — ningún `Component` de afuera se toca.
+
+**Por qué NO es el buffer de celdas 100% propio que D-004 ya descartó:** este
+newtype no reimplementa nada de lógica (ancho unicode, diffing, estilos) —
+sólo envuelve. "Cero tipos de ratatui en la firma pública" (esto) es una
+decisión distinta de "cero ratatui en la implementación" (lo que D-004
+rechazó por el costo).
+
+**Costo:** por cada tipo de ratatui que un widget público termine necesitando
+exponer (`Style`, `Color`, `Modifier`...) hay que decidir si también se
+envuelve. No hace falta resolverlo ahora — se decide cuando la Fase 4 lo pida
+de verdad.
+
+**Consecuencia de módulos:** `Rect`/`Buffer`/`Render`/`Component` tienen que
+vivir en un módulo `pub`, no en `render.rs` (que sigue `pub(crate)` a
+propósito — ver D-004/Fase 2). La visibilidad de un ítem queda tapada por la
+de su módulo contenedor, así que un `pub struct Rect` dentro de un
+`pub(crate) mod render` sigue siendo invisible afuera del crate.
+
+**Se revisa si:** la capa de conversión crece tanto que se vuelve el archivo
+más grande del crate sin que nadie haya cambiado de backend — ahí vale
+preguntarse si compró algo real.

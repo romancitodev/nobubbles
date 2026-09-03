@@ -29,6 +29,43 @@ que no se puede reconstruir leyendo el código.
 
 ---
 
+## 2026-09-03 (c) — Fase 3: arranque
+
+**Hecho:**
+- Borrado ELM completo (D-009): `src/components/*`, `src/core/*` (`Model`,
+  `Command`, `Internal`, `QuitHandle`, `ProgramBuilder`, `Program`),
+  `examples/hello_world.rs`, `examples/steps.rs`.
+- `lib.rs` actualizado: sin `pub mod components` / `pub mod core`, doc comment
+  del ejemplo ELM reemplazado por una línea.
+- `cargo check --lib` limpio. Sólo warnings `dead_code` en `render.rs`
+  (esperado — nada lo llama todavía, eso lo cablea el loop de Fase 3).
+
+**Abierto:**
+- Nada de esto está commiteado todavía. Pendiente decidir si el borrado va en
+  un commit separado del diff previo de `render.rs` (comentario doc +
+  reformateo, sin commitear de antes de esta sesión, no tocado).
+- `CLAUDE.md` modificado y `examples/signals.rs` sin trackear siguen sin
+  commitear, de antes de esta sesión — tampoco tocados.
+
+**Siguiente:**
+- Extraer `poll_timeout(dirty: bool, since_render: Duration, frame: Duration)
+  -> Duration` como función pura — primer paso de verdad de la Fase 3, antes
+  de tocar `Component`:
+  1. Crear `src/loop_.rs` (con guión bajo, `loop` es keyword).
+  2. Declarar `mod loop_;` en `lib.rs` (sin `pub` todavía).
+  3. Escribir la función: si `dirty`, `frame.saturating_sub(since_render)`; si
+     no, la constante `IDLE` (250ms). El `saturating_sub` es la Trampa 1 del
+     ROADMAP — sin él, underflow o pánico.
+  4. `#[cfg(test)] mod tests` con 3 asserts: (a) dirty + frame no cumplido →
+     resto positivo, (b) dirty + frame ya pasado → `Duration::ZERO`, (c) no
+     dirty → siempre `IDLE`, sin importar `since_render`. Es la Trampa 2.
+  5. `cargo test loop_` para validar antes de seguir con `trait Component`.
+  - Lógica del loop viejo para copiar la forma del `if/else`:
+    `git show HEAD~1:src/core/program.rs` (o `git log -- src/core/program.rs`
+    si el borrado de arriba ya quedó commiteado para cuando retomes).
+
+---
+
 ## 2026-09-03 (b) — Fase 2: renderer
 
 **Hecho:**
