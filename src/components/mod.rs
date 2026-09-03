@@ -17,3 +17,13 @@ struct Element {
 pub trait IntoElement {
     fn into_element(self) -> Element;
 }
+
+// struct App;
+
+// pub fn app() -> Result<..., ...> {
+//     let renderer = Renderer::<backend::Terminal>::new();
+//     renderer.draw(|f: &mut Frame, ctx: Ctx<App>| {
+//         ctx.steps.render(&mut frame, ctx); // all the steps now how to render themselves
+//     })
+//     renderer.run(AppState::new());
+// }
