@@ -13,3 +13,9 @@ TUI reactivo en Rust. Signals en vez de mensajes, modo inline y fullscreen.
 Agregar entrada nueva **arriba** en `internal/LOG.md` con la plantilla que está
 ahí. Si una decisión de arquitectura cambió, actualizar `DECISIONS.md` — no
 enterrarla sólo en la bitácora.
+
+## Nota de flujo
+
+El repo tiene `commit.gpgsign = true`. Un `git commit` desde una shell no
+interactiva se cuelga esperando el pinentry hasta el timeout. Los commits los
+corre el usuario en su terminal — nunca saltear la firma con `--no-gpg-sign`.

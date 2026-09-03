@@ -7,13 +7,11 @@ mensajes, y con modo inline (cliclack) como ciudadano de primera.
 
 ## Estado
 
-Fase 1 sin empezar. Hay WIP sin commitear en `src/core/program.rs`: el loop ELM
-quedó a medio migrar a single-thread. Los threads, el `Arc<Mutex>` y los bounds
-`Send + Sync` ya salieron; falta el cuerpo del loop, que todavía lee de `self.rx`
-cuando ya nadie le manda nada — la app arranca, dibuja una vez y queda muerta.
+**Fase 1 lista.** `src/signals.rs`: arena thread-local, signals `Copy`, split
+read/write, y guards RAII que prenden el dirty al dropearse. 8 tests en verde y
+Miri limpio sobre los dos `unsafe`.
 
-Terminarlo y commitearlo como checkpoint. Ese esqueleto **es** el de la Fase 3:
-sólo cambian las líneas del medio. Ver D-009 para qué se rescató y qué se canceló.
+Falta pulido menor, anotado abajo. **Siguiente: Fase 2, renderer.**
 
 ---
 

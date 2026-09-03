@@ -243,3 +243,100 @@ en runtime — no se linkea lo que no se llama. Aceptable.
 
 **Se revisa si:** llegamos a la Fase 6 y se elige otro backend, o si el tiempo de
 build empieza a molestar antes.
+
+---
+
+## D-012 — Arena a mano, no `slotmap` ni `generational-box`
+
+**Estado:** aceptada · 2026-09-02
+
+**Las tres opciones no están al mismo nivel.** `slotmap` es una estructura de
+datos (claves versionadas); `generational-box` es la solución completa a este
+problema, de la gente de Dioxus. Hacerlo a mano es no usar ninguna.
+
+**Por qué a mano:** todo lo que `generational-box` da de más — generaciones,
+detección de handle muerto, `Owner` para liberar por scope — existe para
+resolver el reuso de slots. Si la arena nunca libera, no hay reuso y el downcast
+es infalible por construcción. Son ~40 líneas y son el núcleo de todo lo demás:
+no es el lugar para una caja negra la primera vez.
+
+**Por qué `slotmap` es el medio equivocado para nosotros:** te da claves con
+versión, pero el `Box<dyn Any>` y el `RefCell` los seguís escribiendo igual —
+pasás de 40 líneas a 35 y sumás una dependencia. Leptos sí lo usa, porque su
+slot guarda un *nodo del grafo reactivo* (valor + suscriptores + fuentes +
+estado), un struct rico y propio. Nosotros no tenemos grafo (D-003): el slot es
+un valor pelado. La ventaja no aplica.
+
+**El upgrade es barato:** la API pública (`Signal<T>` newtype `Copy`, `.get()`,
+`.set()`) es la misma con un `Vec` adentro o con un `GenerationalBox`. Se
+cambian las tripas sin que nadie se entere.
+
+**Se revisa si:** se crean componentes dinámicamente en un loop — una lista con
+filas que se agregan y quitan, un file browser. Ahí cada fila que desaparece deja
+sus signals colgados y el leak deja de ser teórico. Entonces va
+`generational-box` directo: meterle generaciones al `Vec` a mano es reescribir
+esa crate, peor.
+
+Los prompts secuenciales de la Fase 5 **no** son ese caso — diez prompts son
+veinte signals.
+
+---
+
+## D-013 — `Signal<T>` debe ser `!Send` y `!Sync`
+
+**Estado:** aceptada · 2026-09-02
+
+**El problema:** `usize` es `Send + Sync` y `PhantomData<T>` es `Send` si `T` lo
+es. O sea que `Signal<T>(usize, PhantomData<T>)` es `Send`, y el compilador deja
+copiarlo dentro de un `thread::spawn`. Pero la arena es `thread_local`: en ese
+thread es *otra* arena. En el mejor caso panica; en el peor el índice existe con
+un tipo que coincide y se lee el signal equivocado en silencio.
+
+**El arreglo, una línea:**
+
+```rust
+pub struct Signal<T>(usize, PhantomData<*const T>);
+```
+
+Un puntero crudo no es `Send` ni `Sync`, así que el `Signal` tampoco. Sigue
+siendo `Copy`: `PhantomData<X>` es `Copy` para cualquier `X`.
+
+**Consecuencia buena:** D-010 pasa de ser disciplina a ser regla del compilador.
+El canal de efectos lleva closures precisamente porque los signals no pueden
+cruzar threads — y ahora, si alguien lo intenta, no compila.
+
+**Ojo:** el `derive(Copy)` sobre estos tipos va a exigir `T: Copy` por el
+`PhantomData`. Hay que implementar `Copy` y `Clone` a mano. Es el error clásico
+la primera vez.
+
+---
+
+## D-014 — Guards RAII, sin `Deref` sobre `Signal`
+
+**Estado:** aceptada · 2026-09-03
+
+**Lo que no se puede:** `impl Deref for Signal<T>`. El valor vive detrás de un
+préstamo verificado en runtime, y `Deref` promete un `&T` atado a `&self` sin
+lugar donde guardar el guard. Es la misma razón por la que `RefCell` tiene
+`borrow() -> Ref<T>` y `Mutex` tiene `lock() -> MutexGuard<T>`.
+
+`DerefMut` es peor: devuelve `&mut T` sin punto de cierre, así que **no puede
+prender el dirty**. `*contador += 1` mutaría sin que la pantalla se entere.
+Silencioso y a depurar meses después.
+
+**Lo que sí:** `SignalRef<T>` y `SignalRefMut<T>`, dueños del `Rc`, con el
+préstamo adentro. `SignalRefMut` prende el dirty en su `Drop` — ese es el punto
+de cierre que `DerefMut` sobre `Signal` no tenía.
+
+**El precio:** son structs auto-referenciales (el guard toma prestado de algo que
+el guard posee), así que llevan un `transmute` de lifetime. **El invariante es el
+orden de los campos**: `value` antes que `_slot`, para que el préstamo se suelte
+antes de que la allocation pueda liberarse. Invertirlos es use-after-free, y
+ningún test lo agarra — por eso Miri.
+
+**Alternativa descartada:** `self_cell`, que genera structs auto-referenciales
+sin escribir `unsafe`. Son 30 líneas contra una dependencia, y el `unsafe` está
+acotado a dos funciones. Si el módulo crece, se revisa.
+
+**Se revisa si:** aparece un tercer guard, o el invariante de orden deja de
+alcanzar.

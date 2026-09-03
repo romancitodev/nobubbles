@@ -29,6 +29,83 @@ que no se puede reconstruir leyendo el código.
 
 ---
 
+## 2026-09-03 — Fase 1: signals
+
+**Hecho:**
+- `src/signals.rs` completo: arena thread-local, `Signal`/`ReadSignal`/`WriteSignal`
+  `Copy`, guards `SignalRef`/`SignalRefMut`, flag de dirty.
+- 8 tests en verde. Miri limpio sobre los dos `unsafe`.
+- D-012 (arena a mano), D-013 (`!Send`), D-014 (guards RAII).
+
+**Aprendido:**
+- Un `Rc<RefCell<_>>` por slot, en vez de un `RefCell` alrededor de toda la
+  arena, es lo que permite `total.update(|t| *t += precio.get())` sin panic.
+  El truco es sacar el `Rc` y soltar el préstamo de la arena antes de tocar el
+  valor.
+- `DerefMut` no puede prender el dirty porque no tiene punto de cierre. Un guard
+  con `Drop` sí. Esa es la razón de ser de los guards, no la ergonomía.
+- Las implementaciones reales viven en `ReadSignal`/`WriteSignal` y `Signal`
+  reenvía. Así cada `unsafe` queda en un solo lugar.
+
+**Callejones sin salida:**
+- `impl Deref for Signal<T>`. Imposible: el guard no tiene dónde vivir. Y el
+  intento con `downcast_ref::<&T>()` **compilaba y panicaba el 100% de las
+  veces**, porque `&'static T` es `Copy` y se copiaba afuera del guard. Regla
+  que sale de ahí: `downcast` pide el tipo *guardado*, nunca el de la referencia
+  que querés sacar. Ver D-014.
+- `use std::borrow::BorrowMut` (auto-import de rust-analyzer) secuestró
+  `slot.borrow_mut()`. La impl blanket `BorrowMut<T> for T` matchea el receptor
+  antes de derefear al `RefCell`, así que devolvía `&mut Rc<...>` en vez de
+  `RefMut`. El error era E0282 en el closure y no mencionaba el trait por ningún
+  lado. Perdí un rato largo. Si `.borrow()` anda y `.borrow_mut()` no, mirar los
+  imports antes que el código.
+- `should_panic(expected = "already borrowed: BorrowMutError")` era la dirección
+  equivocada: el caso es `borrow_mut` primero y `borrow` adentro, o sea
+  "already mutably borrowed".
+
+**Abierto:**
+- Pulido de `signals.rs`: falta el `//!` con los dos `compile_fail` (D-008 y
+  D-013 no tienen verificación), los tests `split_halves_share_the_slot` y
+  `can_create_a_signal_inside_update`, las anotaciones `'_` que deberían ser
+  `'static`, `RT`/`Runtime` que siguen públicas, y el marcador `ponytail:`.
+- D-006 (`Component` con `&self`) sigue sin confirmar. Antes de Fase 3.
+
+**Siguiente:**
+- Fase 2: renderer sobre ratatui.
+
+---
+
+## 2026-09-02 (b) — Loop en un solo thread
+
+**Hecho:**
+- Terminado el loop single-thread. `event::poll` en el main, sin threads, sin
+  `Arc<Mutex>`, bounds `Send + Sync` fuera, `Internal::Tick` borrada.
+- Cuatro commits, árbol limpio. Checkpoint en `119aade`.
+
+**Aprendido:**
+- El bloque de render tiene que ser hermano del `while` que drena el canal, no
+  hijo. Como al canal no le escribe nadie (sin threads, sólo `QuitHandle`),
+  `try_recv()` falla en la primera vuelta y todo lo que esté adentro del `while`
+  es inalcanzable. Se cayó dos veces en la misma trampa, con una llave de
+  diferencia cada vez.
+- El filtro de teclas quedó invertido una vez (`==` en vez de `!=`), que descarta
+  justo los `Press`. Síntoma: la app no responde a nada. Fácil de confundir con
+  el bug de render, que da "responde pero no dibuja".
+
+**Callejones sin salida:**
+- Los dos bugs de arriba no se ven leyendo el código, sólo trazando. Ambos
+  compilan y ambos dan una app que arranca. Si algo vuelve a fallar así, trazar
+  qué escribe al canal antes de mirar la lógica.
+
+**Abierto:**
+- D-006 (`Component` con `&self`) sigue sin confirmar. Antes de Fase 3.
+- Warnings restantes: todos del código ELM que muere en Fase 3. Ignorar.
+
+**Siguiente:**
+- Fase 1: signals.
+
+---
+
 ## 2026-09-02 — Diseño, sin código
 
 **Hecho:**
