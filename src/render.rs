@@ -1,11 +1,14 @@
 use std::io::{self, Stdout};
 
-use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{
+  EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::{
   Terminal, TerminalOptions, Viewport,
   backend::{Backend, CrosstermBackend},
 };
 
+/// It creates an `inline` Terminal backed up from `ratatui`.
 pub(crate) fn inline<B: Backend>(backend: B, height: u16) -> Result<Terminal<B>, B::Error> {
   Terminal::with_options(
     backend,

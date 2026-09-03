@@ -16,12 +16,23 @@ type Slot = Rc<RefCell<dyn Any>>;
 pub struct Runtime {
   slots: RefCell<Vec<Slot>>,
   dirty: Cell<bool>,
+  quit: Cell<bool>,
 }
 
 /// It takes the `slot` from the `Runtime` and returns a clone of it.
 /// This is used to get the `slot` from the `Runtime` without having to borrow the `Runtime` for the entire duration of the function.
 fn slot(idx: usize) -> Slot {
   RT.with(|ctx| Rc::clone(&ctx.slots.borrow()[idx]))
+}
+
+pub fn quit() {
+  RT.with(|ctx| ctx.quit.set(true));
+}
+
+/// It returns the value of the `quit` flag of the `Runtime`.
+#[must_use]
+pub fn should_quit() -> bool {
+  RT.with(|ctx| ctx.quit.get())
 }
 
 /// It sets the `dirty` flag of the `Runtime` to `true`.
@@ -248,6 +259,18 @@ impl<T> From<Signal<T>> for WriteSignal<T> {
   }
 }
 
+macro_rules! display_handle {
+  ($($t:ident),*) => { $(
+  impl<T: std::fmt::Display + 'static> std::fmt::Display for $t<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+      self.with_ref(|v| write!(f, "{v}"))
+    }
+  }
+  )*};
+}
+
+display_handle!(Signal, ReadSignal);
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -316,5 +339,11 @@ mod tests {
   fn self_referencial_update_panics() {
     let s = signal(1);
     s.update(|v| *v += s.get());
+  }
+
+  #[test]
+  fn quit_the_app() {
+    quit();
+    assert!(should_quit());
   }
 }

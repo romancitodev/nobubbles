@@ -1,29 +1,50 @@
-/// UI components for building terminal interfaces.
-mod input;
-mod text;
+use ratatui::widgets::Widget;
 
-pub use input::Input;
-pub use text::Text;
+/// A rectangular area, wrapping ratatui's own. kept as a newtype so
+/// ratatui never appears in a public signature.
+#[derive(Clone, Copy)]
+pub struct Rect(ratatui::layout::Rect);
 
-/// Internal representation of a UI element.
-/// Not yet used - part of planned component system.
-struct Element {
-    id: u32,
-    content: String,
+/// A cell buffer, wrapping ratatui's own.
+pub struct Buffer<'b>(&'b mut ratatui::buffer::Buffer);
+
+impl From<Rect> for ratatui::layout::Rect {
+  fn from(rect: Rect) -> Self {
+    rect.0
+  }
 }
 
-/// Convert something into a renderable element.
-/// Not implemented yet.
-pub trait IntoElement {
-    fn into_element(self) -> Element;
+impl From<ratatui::layout::Rect> for Rect {
+  fn from(rect: ratatui::layout::Rect) -> Self {
+    Rect(rect)
+  }
 }
 
-// struct App;
+impl<'b> From<&'b mut ratatui::buffer::Buffer> for Buffer<'b> {
+  fn from(buf: &'b mut ratatui::buffer::Buffer) -> Self {
+    Buffer(buf)
+  }
+}
 
-// pub fn app() -> Result<..., ...> {
-//     let renderer = Renderer::<backend::Terminal>::new();
-//     renderer.draw(|f: &mut Frame, ctx: Ctx<App>| {
-//         ctx.steps.render(&mut frame, ctx); // all the steps now how to render themselves
-//     })
-//     renderer.run(AppState::new());
-// }
+impl<'b> Buffer<'b> {
+  pub(crate) fn inner_mut(&mut self) -> &mut ratatui::buffer::Buffer {
+    &mut self.0
+  }
+}
+
+/// What a `Component::view()` returns. Implemented for anything that's a
+/// ratatui `Widget`, so built-in widgets get it for free without anyone
+/// outside the crate importing ratatui.
+pub trait Render {
+  fn render(self, area: Rect, buf: &mut Buffer<'_>);
+}
+
+impl<W: Widget> Render for W {
+  fn render(self, area: Rect, buf: &mut Buffer<'_>) {
+    Widget::render(self, area.into(), buf.inner_mut());
+  }
+}
+
+pub trait Component {
+  fn view(&self) -> impl Render;
+}
