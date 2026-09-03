@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 compio = { version = "0.17.0", features = ["macros"] }
 crossterm = "0.29.0"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
