@@ -1,5 +1,5 @@
-use crossterm::event::{Event, KeyCode, KeyEvent};
-use nobubbles::core::{Command, Model, Program, ProgramBuilder};
+use crossterm::event::{Event, KeyCode};
+use nobubbles::core::{Command, Model, ProgramBuilder};
 
 #[derive(Debug, Clone)]
 enum Msg {

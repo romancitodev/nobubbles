@@ -36,9 +36,7 @@
 //!     }
 //! }
 //!
-//! fn main() {
-//!     ProgramBuilder::new(App).build().run().unwrap();
-//! }
+//! ProgramBuilder::new(App).build().run().unwrap();
 //! ```
 
 pub mod components;
