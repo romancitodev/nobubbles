@@ -1,7 +1,6 @@
 use std::{
     io::{self, Write},
-    sync::{Arc, Mutex, mpsc},
-    thread,
+    sync::mpsc,
     time::{Duration, Instant},
 };
 
@@ -19,7 +18,6 @@ use crate::core::Model;
 enum Internal<M> {
     User(M),
     Quit,
-    Tick,
 }
 
 /// Builder for configuring a Program before running it.
@@ -53,7 +51,7 @@ pub struct ConfigProgram {
     alt_screen: bool,
 }
 
-impl<M: Model + Send + Sync + 'static> ProgramBuilder<M> {
+impl<M: Model> ProgramBuilder<M> {
     /// Create a new program with your model.
     pub fn new(model: M) -> Self {
         Self {
@@ -88,21 +86,21 @@ impl<M: Model + Send + Sync + 'static> ProgramBuilder<M> {
     }
 }
 
-/// The running application. Create with ProgramBuilder.
+/// The running application. Create with [`ProgramBuilder`].
 ///
 /// Manages the event loop, threading, and rendering.
 pub struct Program<M: Model> {
-    model: Arc<Mutex<M>>,
+    model: M,
     tx: mpsc::Sender<Internal<M::Message>>,
     rx: mpsc::Receiver<Internal<M::Message>>,
     config: ConfigProgram,
 }
 
-impl<M: Model + Send + 'static> Program<M> {
+impl<M: Model> Program<M> {
     pub fn new(model: M, config: ConfigProgram) -> Self {
         let (tx, rx) = mpsc::channel();
         Self {
-            model: Arc::new(Mutex::new(model)),
+            model,
             tx,
             rx,
             config,
@@ -112,16 +110,16 @@ impl<M: Model + Send + 'static> Program<M> {
     /// Start the application. Blocks until the app exits.
     ///
     /// Sets up the terminal, spawns event handlers, and runs the main loop.
-    /// Returns when a Command::quit() is issued or an error occurs.
+    /// Returns when a [`Command::quit()`] is issued or an error occurs.
+    ///
+    /// # Errors
+    /// It can trigger an error if the terminal cannot be set to raw mode, or if there is an issue with rendering or event handling.
     pub fn run(mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
         if self.config.alt_screen {
             execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
         }
-
-        self.init_event_handler();
-        self.init_tick_handler();
 
         self.render()?;
 
@@ -143,107 +141,52 @@ impl<M: Model + Send + 'static> Program<M> {
         }
     }
 
+    /// The main event loop of the application. Polls for events, processes messages, and renders the view.
     fn event_loop(&mut self) -> io::Result<()> {
-        let frame_duration = Duration::from_secs_f64(1.0 / self.config.fps as f64);
+        const IDLE: Duration = Duration::from_millis(250);
+        let frame = Duration::from_secs_f64(1.0 / f64::from(self.config.fps));
         let mut last_render = Instant::now();
-        let mut needs_render = false;
+        let mut dirty = false;
 
         loop {
-            if let Ok(msg) = self.rx.recv_timeout(Duration::from_millis(16)) {
-                match msg {
-                    Internal::User(user_msg) => {
-                        let mut model = self.model.lock().unwrap();
+            let timeout = if dirty {
+                frame.saturating_sub(last_render.elapsed())
+            } else {
+                IDLE
+            };
 
-                        // Update the model and get the command
-                        let command = model.update(user_msg);
-                        drop(model); // Release lock before rendering
-
-                        needs_render = true;
-
-                        // Check if the command indicates we should quit
-                        // This is completely transparent to the developer!
-                        if command.is_quit() {
-                            break;
-                        }
-
-                        // TODO: Handle other command types (Perform, Batch, etc.)
-                    }
-                    Internal::Tick => {
-                        // Tick event for periodic updates
-                        needs_render = true;
-                    }
-                    Internal::Quit => {
-                        // Direct quit signal (from QuitHandle)
+            if event::poll(timeout)? {
+                let ev = event::read()?;
+                if matches!(ev, event::Event::Key(k) if k.kind != KeyEventKind::Press) {
+                    continue; // Ignore key releases
+                }
+                if let Some(msg) = self.model.event(ev) {
+                    if self.model.update(msg).is_quit() {
                         break;
                     }
+                    dirty = true;
                 }
             }
 
-            // Render only if needed and enough time has passed (frame limiting)
-            if needs_render && last_render.elapsed() >= frame_duration {
+            while let Ok(internal) = self.rx.try_recv() {
+                match internal {
+                    Internal::Quit => return Ok(()),
+                    Internal::User(msg) => {
+                        if self.model.update(msg).is_quit() {
+                            return Ok(());
+                        }
+                        dirty = true;
+                    }
+                }
+            }
+            if dirty && last_render.elapsed() >= frame {
                 self.render()?;
-                needs_render = false;
+                dirty = false;
                 last_render = Instant::now();
             }
         }
+
         Ok(())
-    }
-
-    fn init_event_handler(&self)
-    where
-        M: Send + 'static,
-    {
-        let tx = self.tx.clone();
-        let model = Arc::clone(&self.model);
-        thread::spawn(move || {
-            loop {
-                // Poll with shorter timeout to be more responsive
-                if event::poll(Duration::from_millis(10)).unwrap_or(false) {
-                    // There is an event available
-                    if let Ok(ev) = event::read() {
-                        // Filter out key repeat events to prevent duplication
-                        if let crossterm::event::Event::Key(key_event) = ev {
-                            // Only process Press events, ignore Repeat and Release
-                            if key_event.kind != KeyEventKind::Press {
-                                continue;
-                            }
-                        }
-
-                        let model = model.lock().unwrap();
-                        let msg = model.event(ev);
-                        drop(model); // Release lock
-
-                        if let Some(message) = msg {
-                            // Send user message wrapped in internal message
-                            if tx.send(Internal::User(message)).is_err() {
-                                // Channel closed, exit thread
-                                break;
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                }
-            }
-        });
-    }
-
-    fn init_tick_handler(&self)
-    where
-        M: Send + 'static,
-    {
-        let tx = self.tx.clone();
-        let fps = self.config.fps;
-        thread::spawn(move || {
-            let tick_duration = Duration::from_secs_f64(1.0 / fps as f64);
-            loop {
-                thread::sleep(tick_duration);
-                if tx.send(Internal::Tick).is_err() {
-                    // Channel closed, exit thread
-                    break;
-                }
-            }
-        });
     }
 
     fn render(&self) -> io::Result<()> {
@@ -257,10 +200,8 @@ impl<M: Model + Send + 'static> Program<M> {
         )?;
         // }
 
-        let model = self.model.lock().unwrap();
+        let model = &self.model;
         let view = model.view();
-        drop(model); // Release lock before flushing
-
         queue!(stdout, Print(view))?;
 
         stdout.flush()?;
