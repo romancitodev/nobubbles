@@ -15,8 +15,14 @@ fn poll_timeout(dirty: bool, since: Duration, frame: Duration) -> Duration {
   }
 }
 
+/// Drives the event loop. `terminal` is owned (not `&mut`) because a resize replaces it
+/// wholesale, recreating an inline `Terminal` is the only way to change its viewport
+/// height. `resize` builds a fresh one at a given height. `current_height` is what
+/// `terminal` was built with, so `poll` can tell when the view asked for something else.
 pub fn poll<B: Backend>(
-  terminal: &mut ratatui::Terminal<B>,
+  mut terminal: ratatui::Terminal<B>,
+  mut current_height: u16,
+  mut resize: impl FnMut(u16) -> eyre::Result<ratatui::Terminal<B>>,
   frame: Duration,
   mut ui: impl FnMut(&mut Ctx),
 ) -> eyre::Result<()>
@@ -46,13 +52,27 @@ where
     }
 
     if crate::signals::is_dirty() && last_render.elapsed() >= frame || key.is_some() || first_draw {
+      let mut wanted_height = current_height;
       terminal.draw(|frame| {
         let mut ctx = Ctx::new(frame, key);
         ui(&mut ctx);
+        wanted_height = ctx.wanted_height();
       })?;
       crate::signals::clear_dirty();
       last_render = Instant::now();
       first_draw = false;
+
+      if wanted_height != current_height {
+        // Clear the old viewport first, a smaller terminal doesn't know the old one left
+        // taller content on screen, so it never overwrites the leftover rows on its own.
+        terminal.clear()?;
+        // Pin the cursor to column 0 before building the new terminal. If it's left
+        // mid-line, the new inline viewport can reserve an extra row to make room for it.
+        crossterm::execute!(std::io::stdout(), crossterm::cursor::MoveToColumn(0))?;
+        terminal = resize(wanted_height)?;
+        current_height = wanted_height;
+        first_draw = true; // redraw immediately, at the new size, instead of waiting a frame
+      }
     }
   }
 }

@@ -29,6 +29,89 @@ que no se puede reconstruir leyendo el código.
 
 ---
 
+## 2026-09-03 (d) — Fase 4: arranque de Input
+
+**Hecho:**
+- `on_key` se resolvió como método propio de `Input`, no del trait `Component`.
+  `Component` se queda sólo con `view()`. El único caso real que pide dispatch
+  genérico es un contenedor (`Tabs`/`List`/`Panel`, Fase 6) reenviando a un
+  hijo desconocido, `Input` es hoja, no lo necesita.
+- `src/components/input.rs`: `Input` (`Signal<String>` + `Signal<usize>`,
+  cursor en índice de grafema vía `unicode-segmentation`), `on_key` maneja
+  `Char`/`Backspace`/`Delete`/`Left`/`Right` por grafema, no por `char` ni por
+  byte. `impl Render for Input` propio.
+- `Render::height(&self, width) -> u16` (default 1), para que un contenedor
+  pueda medir a sus hijos antes de dibujar.
+- `Column`: composición de varios `Render` heterogéneos vía
+  `Vec<Box<dyn ErasedRender>>` (trait interno con `self: Box<Self>`, para
+  sortear que `Render::render` no es object safe con `self` por valor).
+  `column!` macro como azúcar sobre `Column::new().child(...)`.
+- `Column::render` usa `Constraint::Length(child.height(width))` por hijo en
+  vez de `Fill(1)` parejo, se ajusta a lo que cada hijo mide.
+- Viewport inline dinámico: `engine::poll` pasó a ser dueño del `Terminal`
+  (no `&mut`) y recibe un closure `resize(u16) -> Terminal<B>`. Después de
+  cada draw compara la altura medida (`Ctx::wanted_height`) contra la actual
+  y reconstruye si cambió, con `terminal.clear()` antes para no dejar basura
+  de la altura vieja pintada en pantalla.
+- `Inline::new(height, fps)` pasó a `Inline::run(fps, ui)`, sin `height` — el
+  loop la mide solo, no hace falta que el usuario la adivine.
+- `examples/input.rs` y `examples/counter.rs` actualizados a la API nueva.
+
+**Aprendido:**
+- `impl Trait` en retorno sólo admite un tipo concreto fijo. Un `if/else` que
+  devuelve `Paragraph` en una rama y algo distinto en la otra no compila.
+  `Column::new().child(x)` y `.child(a).child(b)` son el mismo tipo (`Column`)
+  sin importar cuántos hijos tenga el `Vec` interno, así que ramificar la
+  vista según estado (formulario con "¿confirmaste?") sale gratis con
+  `Column` y no salía con una versión basada en tuplas.
+- `Terminal::resize()` de ratatui no sirve para cambiar la altura de un
+  `Viewport::Inline` a una nueva, usa la altura con la que se construyó
+  originalmente (confirmado leyendo el código fuente de
+  `ratatui-core::terminal::resize`). La única vía sigue siendo reconstruir el
+  `Terminal` entero, tal como ya había quedado anotado en Fase 2.
+- `Terminal::clear()` en modo inline limpia desde el origen del viewport
+  hacia abajo, preservando el cursor. Hace falta llamarlo en el `Terminal`
+  viejo antes de reemplazarlo, si no el contenido de la altura anterior queda
+  pintado en pantalla.
+
+**Callejones sin salida:**
+- `impl<A: Render, B: Render> Render for (A, B)` (y aridades mayores vía
+  macro), rechazado con E0119 por el blanket impl sobre `Widget` más la
+  coherencia de tipos "fundamentales" (las tuplas cuentan como tales). La
+  salida fue envolver en un struct local (`Column`), que no tiene ese
+  problema.
+- El primer intento de forzar el primer dibujado usó
+  `static FIRST_RENDER: std::sync::Once`. Fallaba porque `Once` es una única
+  vez *por proceso*, no por invocación de `poll` — se hubiera roto en la
+  Fase 7 (inline seguido de fullscreen en el mismo proceso). Se cambió a una
+  variable local, `first_draw`.
+- `crossterm::execute!(stdout(), MoveToColumn(0))` antes de reconstruir el
+  `Terminal` al achicar, probado en una terminal real (Windows) y **no
+  arregla** el salto de línea de abajo. La hipótesis de la columna del
+  cursor queda descartada, el fix se dejó en el código porque no hace daño,
+  pero el bug real sigue sin causa confirmada.
+
+**Abierto:**
+- Bug visual sin resolver: al achicar el viewport (2 líneas a 1, al confirmar
+  el formulario), el salto de línea contra el output previo de cargo se ve
+  distinto al del camino de crecer. Pendiente de investigar de cero mañana,
+  probablemente con `RUST_LOG`/tracing del lado de crossterm o comparando
+  a mano qué secuencia de escape termina emitiendo cada camino.
+- `examples/input.rs`: el guard `_ if !form.submitted.get()` en el `match` de
+  `on_key` es manual. Recién en Fase 5 (prompts que devuelven un valor y
+  terminan su propio loop) deja de hacer falta acordarse de esto a mano.
+- El blanket `impl<W: Widget> Render for W` no mide un `Paragraph` multilínea
+  de verdad, usa el default de 1. No importa hoy (sólo hay texto de una
+  línea), pero si aparece un `Paragraph` con wrap, `height()` va a mentir.
+
+**Siguiente:**
+- Investigar de cero el bug del salto de línea al achicar el viewport, con
+  la hipótesis de la columna del cursor ya descartada.
+- Seguir Fase 4: `Select`, `Confirm`, `Spinner`, `Progress`, cada uno con su
+  `*Style`.
+
+---
+
 ## 2026-09-03 (c) — Fase 3: arranque
 
 **Hecho:**

@@ -17,7 +17,7 @@ impl Component for Counter {
 fn main() -> Result<()> {
   let counter = Counter { count: signal(0) };
 
-  Inline::new(1, 30).run(|cx| {
+  Inline::run(30, |cx| {
     if let Some(key) = cx.key() {
       match key.code {
         crossterm::event::KeyCode::Up => counter.count.update(|c| *c += 1),
