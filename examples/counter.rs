@@ -2,7 +2,7 @@ use eyre::Result;
 use nobubbles::app::Inline;
 use nobubbles::components::{Component, Render};
 use nobubbles::signals::{Signal, quit, signal};
-use ratatui::widgets::Paragraph;
+use nobubbles::components::text::Text;
 
 struct Counter {
   count: Signal<i32>,
@@ -10,7 +10,7 @@ struct Counter {
 
 impl Component for Counter {
   fn view(&self) -> impl Render {
-    Paragraph::new(format!("count: {} (up/down, q to quit)", self.count))
+    Text::new(format!("count: {} (up/down, q to quit)", self.count))
   }
 }
 
@@ -27,6 +27,6 @@ fn main() -> Result<()> {
       }
     }
 
-    cx.render(&counter);
+    cx.render(counter.view());
   })
 }
