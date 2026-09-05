@@ -75,9 +75,20 @@ where
       crate::signals::clear_dirty();
       terminal.draw(|frame| {
         origin = frame.area().y;
-        let mut ctx = Ctx::new(frame, key);
-        ui(&mut ctx);
-        wanted_height = ctx.wanted_height();
+
+        // `ctx` borrows the frame, so it has to be done with before the cursor goes on it.
+        // Nothing asking for the cursor means `draw` hides it, which is what a view with
+        // nothing to type into wants.
+        let cursor = {
+          let mut ctx = Ctx::new(frame, key);
+          ui(&mut ctx);
+          wanted_height = ctx.wanted_height();
+          ctx.cursor()
+        };
+
+        if let Some((x, y)) = cursor {
+          frame.set_cursor_position(Position::new(x, y));
+        }
       })?;
       last_render = Instant::now();
       first_draw = false;

@@ -13,10 +13,25 @@ pub mod text;
 #[derive(Clone, Copy)]
 pub struct Rect(ratatui::layout::Rect);
 
-/// A cell buffer, wrapping ratatui's own.
-pub struct Buffer<'b>(&'b mut ratatui::buffer::Buffer);
+/// A cell buffer, wrapping ratatui's own, plus where the terminal cursor should end up.
+///
+/// The cursor rides along because a widget is the only thing that knows where it goes, while
+/// the real cursor is set on the frame, one level above `render`. Whoever built the buffer
+/// reads it back afterwards and hands it up.
+pub struct Buffer<'b> {
+  inner: &'b mut ratatui::buffer::Buffer,
+  cursor: Option<(u16, u16)>,
+}
 
 impl Rect {
+  pub fn x(&self) -> u16 {
+    self.0.x
+  }
+
+  pub fn y(&self) -> u16 {
+    self.0.y
+  }
+
   pub fn width(&self) -> u16 {
     self.0.width
   }
@@ -40,13 +55,28 @@ impl From<ratatui::layout::Rect> for Rect {
 
 impl<'b> From<&'b mut ratatui::buffer::Buffer> for Buffer<'b> {
   fn from(buf: &'b mut ratatui::buffer::Buffer) -> Self {
-    Buffer(buf)
+    Buffer {
+      inner: buf,
+      cursor: None,
+    }
   }
 }
 
 impl<'b> Buffer<'b> {
   pub(crate) fn inner_mut(&mut self) -> &mut ratatui::buffer::Buffer {
-    &mut self.0
+    self.inner
+  }
+
+  /// Asks for the terminal cursor to sit at `(x, y)`, in buffer coordinates.
+  ///
+  /// The last widget to call this wins, which is the point: exactly one thing on screen owns
+  /// the cursor. A view where nobody calls it draws with the cursor hidden.
+  pub fn set_cursor(&mut self, x: u16, y: u16) {
+    self.cursor = Some((x, y));
+  }
+
+  pub(crate) fn cursor(&self) -> Option<(u16, u16)> {
+    self.cursor
   }
 }
 
@@ -72,6 +102,21 @@ impl<W: Widget> Render for W {
 
 pub trait Component {
   fn view(&self) -> impl Render;
+}
+
+/// What the prompt runner needs from the widget it's asking with.
+pub trait Ask {
+  /// The one line this collapses to once it has been answered.
+  ///
+  /// A live `Select` is a list of options; an answered one is the option that won. Swapping
+  /// them on submit is what makes the transcript read as answers instead of as a pile of
+  /// lists.
+  fn answer(&self) -> String;
+
+  /// The keys this listens to, shown next to the closer while it's active.
+  fn controls(&self) -> &'static str {
+    "enter to submit"
+  }
 }
 
 /// Object-safe counterpart of `Render`, so children can be boxed into a `Vec`.

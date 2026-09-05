@@ -14,6 +14,7 @@ pub struct Ctx<'a> {
   buf: &'a mut ratatui::buffer::Buffer,
   key: Option<KeyEvent>,
   wanted_height: u16,
+  cursor: Option<(u16, u16)>,
 }
 
 impl<'a> Ctx<'a> {
@@ -24,6 +25,7 @@ impl<'a> Ctx<'a> {
       buf: frame.buffer_mut(),
       key,
       wanted_height: area.height(),
+      cursor: None,
     }
   }
 
@@ -33,7 +35,10 @@ impl<'a> Ctx<'a> {
   /// can be drawn without wrapping it in a struct first. A `Component` passes `c.view()`.
   pub fn render(&mut self, view: impl Render) {
     self.wanted_height = view.height(self.area.width());
-    view.render(self.area, &mut Buffer::from(&mut *self.buf));
+
+    let mut buf = Buffer::from(&mut *self.buf);
+    view.render(self.area, &mut buf);
+    self.cursor = buf.cursor();
   }
 
   /// Returns the key event, if one is available.
@@ -44,6 +49,11 @@ impl<'a> Ctx<'a> {
   /// Height the last `render()` call reported its view needing, in rows.
   pub(crate) fn wanted_height(&self) -> u16 {
     self.wanted_height
+  }
+
+  /// Where the last `render()` asked for the terminal cursor, if anything did.
+  pub(crate) fn cursor(&self) -> Option<(u16, u16)> {
+    self.cursor
   }
 }
 
