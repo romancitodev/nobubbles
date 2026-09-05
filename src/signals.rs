@@ -12,11 +12,45 @@ thread_local! {
 
 type Slot = Rc<RefCell<dyn Any>>;
 
-#[derive(Default)]
 pub struct Runtime {
   slots: RefCell<Vec<Slot>>,
   dirty: Cell<bool>,
   quit: Cell<bool>,
+  raw_depth: Cell<usize>,
+  fps: Cell<u16>,
+}
+
+/// Frame rate a prompt runs at unless a `Session` says otherwise.
+const DEFAULT_FPS: u16 = 30;
+
+// Hand-written because `Cell<u16>::default()` is 0, and a zero frame rate is a divide by
+// zero in the loop, not a sensible default.
+impl Default for Runtime {
+  fn default() -> Self {
+    Self {
+      slots: RefCell::default(),
+      dirty: Cell::default(),
+      quit: Cell::default(),
+      raw_depth: Cell::default(),
+      fps: Cell::new(DEFAULT_FPS),
+    }
+  }
+}
+
+/// Frame rate the inline prompts run at.
+pub(crate) fn fps() -> u16 {
+  RT.with(|ctx| ctx.fps.get())
+}
+
+/// Sets the frame rate for the prompts that follow. Zero is clamped to 1, since the loop
+/// divides by it.
+pub(crate) fn set_fps(fps: u16) {
+  RT.with(|ctx| ctx.fps.set(fps.max(1)));
+}
+
+/// Puts the frame rate back to the default, for when a session closes.
+pub(crate) fn reset_fps() {
+  RT.with(|ctx| ctx.fps.set(DEFAULT_FPS));
 }
 
 /// It takes the `slot` from the `Runtime` and returns a clone of it.
@@ -35,8 +69,35 @@ pub fn should_quit() -> bool {
   RT.with(|ctx| ctx.quit.get())
 }
 
+/// It sets the `quit` flag of the `Runtime` back to `false`, so the next loop over this
+/// runtime starts fresh. Sequential inline prompts each end with `quit()`, and without this
+/// every prompt after the first would break out before drawing a single frame.
+pub fn clear_quit() {
+  RT.with(|ctx| ctx.quit.set(false));
+}
+
+/// Counts one more holder of raw mode. Returns `true` when this is the first one, meaning
+/// the caller is the one that has to actually turn raw mode on.
+pub(crate) fn raw_enter() -> bool {
+  RT.with(|ctx| {
+    let depth = ctx.raw_depth.get();
+    ctx.raw_depth.set(depth + 1);
+    depth == 0
+  })
+}
+
+/// Drops one holder. Returns `true` when it was the last one, meaning the caller has to turn
+/// raw mode back off.
+pub(crate) fn raw_exit() -> bool {
+  RT.with(|ctx| {
+    let depth = ctx.raw_depth.get().saturating_sub(1);
+    ctx.raw_depth.set(depth);
+    depth == 0
+  })
+}
+
 /// It sets the `dirty` flag of the `Runtime` to `true`.
-fn make_dirty() {
+pub(crate) fn make_dirty() {
   RT.with(|ctx| ctx.dirty.set(true));
 }
 
@@ -274,6 +335,22 @@ display_handle!(Signal, ReadSignal);
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn raw_mode_guards_nest() {
+    assert!(raw_enter(), "the outermost guard is the one that turns raw mode on");
+    assert!(!raw_enter(), "a nested guard has nothing to do");
+    assert!(!raw_exit(), "raw mode stays on while the outer guard lives");
+    assert!(raw_exit(), "the last one out turns it back off");
+  }
+
+  #[test]
+  fn fps_never_reaches_zero() {
+    set_fps(0); // the loop divides by it
+    assert_eq!(fps(), 1);
+    reset_fps();
+    assert_eq!(fps(), DEFAULT_FPS);
+  }
 
   #[test]
   fn get_set() {

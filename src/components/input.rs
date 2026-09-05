@@ -14,7 +14,13 @@ pub struct Input {
 }
 
 impl Input {
-  pub fn new(initial: impl Into<String>) -> Self {
+  /// An empty field.
+  pub fn new() -> Self {
+    Self::with("")
+  }
+
+  /// A field pre-filled with `initial`, cursor at the start.
+  pub fn with(initial: impl Into<String>) -> Self {
     Self {
       value: signal(initial.into()),
       cursor: signal(0),
@@ -31,14 +37,17 @@ impl Input {
     value
       .grapheme_indices(true)
       .nth(grapheme)
-      .map(|(i, _)| i)
-      .unwrap_or(value.len())
+      .map_or(value.len(), |(i, _)| i)
   }
 
+  /// Returns the current value of the input.
+  #[must_use]
   pub fn value(&self) -> String {
     self.value.get()
   }
 
+  /// Trigger function to handle key events for the input. Returns true if the key event was handled, false otherwise.
+  #[must_use]
   pub fn on_key(&self, key: KeyEvent) -> bool {
     match key.code {
       KeyCode::Char(c) => {
@@ -85,9 +94,15 @@ impl Input {
   }
 }
 
+impl Default for Input {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl Render for Input {
   fn render(self, area: super::Rect, buf: &mut super::Buffer<'_>) {
     let value = self.value.get();
-    Widget::render(Paragraph::new(value), area.into(), buf.inner_mut())
+    Widget::render(Paragraph::new(value), area.into(), buf.inner_mut());
   }
 }
