@@ -1,5 +1,10 @@
 use ratatui::widgets::Widget;
 
+pub mod input;
+pub mod progress;
+pub mod select;
+pub mod text;
+
 /// A rectangular area, wrapping ratatui's own. kept as a newtype so
 /// ratatui never appears in a public signature.
 #[derive(Clone, Copy)]
@@ -94,9 +99,18 @@ impl Column {
     Self::default()
   }
 
+  #[must_use]
   pub fn child(mut self, child: impl Render + 'static) -> Self {
     self.children.push(Box::new(child));
     self
+  }
+}
+
+/// N rows of the same thing, straight from an iterator: `rows.iter().copied().collect()`.
+/// Use [`column!`] instead when the children are a fixed list of different types.
+impl<R: Render + 'static> FromIterator<R> for Column {
+  fn from_iter<I: IntoIterator<Item = R>>(children: I) -> Self {
+    children.into_iter().fold(Self::new(), Self::child)
   }
 }
 
@@ -131,11 +145,9 @@ impl Render for Column {
   }
 }
 
-pub mod input;
-
 #[cfg(test)]
 mod tests {
-  use ratatui::{backend::TestBackend, widgets::Paragraph, Terminal};
+  use ratatui::{Terminal, backend::TestBackend, widgets::Paragraph};
 
   use super::*;
 
@@ -158,6 +170,14 @@ mod tests {
       "          ",
       "          ",
     ]);
+  }
+
+  #[test]
+  fn a_column_collects_from_an_iterator_of_rows() {
+    let rows = ["top", "bottom"].map(Paragraph::new);
+    let column: Column = rows.into_iter().collect();
+
+    assert_eq!(column.height(10), 2);
   }
 
   #[test]
