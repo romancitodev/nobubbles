@@ -7,8 +7,14 @@
 
 mod components;
 
+pub use components::confirm::confirm;
 pub use components::input::input;
+pub use components::multiselect::multiselect;
 pub use components::select::select;
+
+use crossterm::style::Stylize;
+
+use crate::components::prompt::{BAR, BAR_END, BAR_START};
 
 /// Keeps the terminal in raw mode for as long as it's alive.
 ///
@@ -57,7 +63,7 @@ impl Drop for Session {
 /// use nobubbles::inline;
 ///
 /// let session = inline::intro("Config")?.fps(60);
-/// let name = inline::input("What's your name? ")?;
+/// let name = inline::input("What's your name?")?;
 /// inline::outro(session).with("Done");
 /// # Ok::<(), eyre::Report>(())
 /// ```
@@ -67,9 +73,11 @@ impl Drop for Session {
 /// # Errors
 /// Can return an error if the terminal cannot be initialized or if there is an issue with rendering
 pub fn intro(title: &str) -> eyre::Result<Session> {
-  // Printed before raw mode goes on, so the newline still returns the carriage and the first
-  // prompt anchors its viewport on the line below.
-  println!("{title}");
+  // Printed before raw mode goes on, so the newlines still return the carriage and the first
+  // prompt anchors its viewport on the line below. The trailing bar is what the first prompt
+  // hangs off.
+  println!("{}  {title}", BAR_START.dark_grey());
+  println!("{}", BAR.dark_grey());
   Session::open()
 }
 
@@ -95,8 +103,19 @@ pub fn outro(session: Session) -> Outro {
 pub struct Outro;
 
 impl Outro {
-  /// Prints a closing line below the transcript.
+  /// Closes the rail with a message. Extra lines are indented under it rather than getting
+  /// their own corner, since a rail only ends once.
   pub fn with(self, message: impl std::fmt::Display) {
-    println!("{message}");
+    let message = message.to_string();
+    let mut lines = message.lines();
+
+    println!(
+      "{}  {}",
+      BAR_END.dark_grey(),
+      lines.next().unwrap_or_default()
+    );
+    for line in lines {
+      println!("   {line}");
+    }
   }
 }

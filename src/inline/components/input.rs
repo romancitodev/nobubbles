@@ -1,25 +1,15 @@
-use crossterm::event::KeyCode;
 use eyre::Result;
-use ratatui::widgets::Paragraph;
 
-use crate::{app::Inline, components::input::Input, signals};
+use crate::{components::input::Input, inline::components::ask};
 
-/// Displays a prompt and waits for user input. Returns the input as a `String`.
+/// Asks for a line of text.
 ///
 /// # Errors
-/// Can return an error if the terminal cannot be initialized or if there is an issue with rendering.
+/// Fails if the terminal can't be set up, or `Cancelled` if the user pressed Ctrl+C.
 pub fn input(prompt: &str) -> Result<String> {
   let field = Input::new();
-  Inline::run(signals::fps(), |cx| {
-    if let Some(key) = cx.key() {
-      if key.code == KeyCode::Enter {
-        signals::quit();
-      } else {
-        let _ = field.on_key(key);
-      }
-    }
-
-    cx.render(Paragraph::new(format!("{}{}", prompt, field.value())));
+  ask(prompt, field, |key| {
+    let _ = field.on_key(key);
   })?;
 
   Ok(field.value())
