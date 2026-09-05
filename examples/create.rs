@@ -1,9 +1,9 @@
-//! A scaffolder, in the shape of `bun create`: a few questions, then the install.
+//! A scaffolder, in the shape of `bun create`, using every prompt the crate has.
 //!
-//! It's the whole crate in one file. The questions are sequential prompts, each its own run
-//! under a single session, so raw mode never drops between them and the answers stay above
-//! as a transcript. The install is the other face: one live view driven by a worker thread
-//! that can't touch the signals and sends `Step` instead.
+//! The questions are sequential prompts, each its own run under a single session, so raw
+//! mode never drops between them and the answers stay above as a transcript. The install is
+//! the other face: a live view driven by a worker thread that never touches the signals and
+//! sends `Step` instead.
 
 use std::thread;
 use std::time::Duration;
@@ -31,16 +31,7 @@ struct Template {
 const TEMPLATES: [Template; 3] = [
   Template {
     name: "React",
-    packages: &[
-      "react",
-      "react-dom",
-      "vite",
-      "typescript",
-      "@types/react",
-      "@shadcn-ui/react",
-      "lucide-icons",
-      "@types/nodejs",
-    ],
+    packages: &["react", "react-dom", "vite", "typescript", "@types/react"],
     dev: "dev",
   },
   Template {
@@ -56,7 +47,38 @@ const TEMPLATES: [Template; 3] = [
 ];
 
 const MANAGERS: [&str; 3] = ["bun", "pnpm", "npm"];
-const EXTRAS: [&str; 3] = ["eslint", "prettier", "vitest"];
+
+/// The flattened options of the grouped prompt below, in the same order.
+const EXTRAS: [&str; 6] = [
+  "eslint",
+  "prettier",
+  "vitest",
+  "playwright",
+  "husky",
+  "lint-staged",
+];
+
+#[derive(Clone, Copy)]
+struct Provider {
+  name: &'static str,
+  /// A local model has nothing to authenticate against.
+  hosted: bool,
+}
+
+const PROVIDERS: [Provider; 3] = [
+  Provider {
+    name: "OpenAI",
+    hosted: true,
+  },
+  Provider {
+    name: "Anthropic",
+    hosted: true,
+  },
+  Provider {
+    name: "Ollama",
+    hosted: false,
+  },
+];
 
 /// What the installer has to say. The protocol belongs to the app, not to the framework.
 #[derive(Clone, Copy)]
@@ -98,13 +120,13 @@ fn work(template: Template, sender: &Emitter<Step>) {
   thread::sleep(Duration::from_millis(420));
 }
 
-/// The install sits on the same rail as the questions, so it reads as one more step and
-/// not as something that escaped the session.
+/// The install sits on the same rail as the questions, so it reads as one more step and not
+/// as something that escaped the session.
 fn board(phase: Progress, current: Progress, done: usize, total: usize) -> impl Render {
   let counter = Text::new(format!("({done}/{total} packages)")).style(Style::new().dim().italic());
 
-  // The package bar only earns a row once a package started. While resolving it has no
-  // ratio and no label, and drawing it anyway leaves a spinner spinning over nothing.
+  // The package bar only earns a row once a package started. While resolving it has no ratio
+  // and no label, and drawing it anyway leaves a spinner spinning over nothing.
   let rows = if current.ratio().is_some() {
     column![phase, current, counter]
   } else {
@@ -146,6 +168,39 @@ fn install(template: Template) -> Result<()> {
   })
 }
 
+/// The optional half of the flow: pick a provider or don't, and only ask for a key when the
+/// provider has something to authenticate against.
+fn ai_provider() -> Result<Option<&'static str>> {
+  let Some(at) = inline::select("AI provider")
+    .items(PROVIDERS.map(|p| p.name))
+    .skip("none, thanks")
+    .ask()?
+  else {
+    inline::log::info("skipping AI setup");
+    return Ok(None);
+  };
+
+  let provider = PROVIDERS[at];
+  if !provider.hosted {
+    inline::log::info(format!("{} runs locally, no key needed", provider.name));
+    return Ok(Some(provider.name));
+  }
+
+  let title = format!("{} API key", provider.name);
+  let _key = inline::password(&title)
+    .validate(|key| {
+      if key.len() < 8 {
+        Err("that looks too short for a key".into())
+      } else {
+        Ok(())
+      }
+    })
+    .ask()?;
+
+  inline::log::success(format!("{} key written to .env", provider.name));
+  Ok(Some(provider.name))
+}
+
 fn main() -> Result<()> {
   let session = inline::intro("create-nobubbles")?;
 
@@ -168,37 +223,48 @@ fn main() -> Result<()> {
 
   let manager = MANAGERS[inline::select("Package manager")
     .items(MANAGERS)
-    .initial(0)
     .strict()
     .ask()?];
 
-  let extras = inline::multiselect("Anything else?")
-    .items(EXTRAS)
-    .max_rows(2)
+  let ai = ai_provider()?;
+
+  let extras = inline::group_multiselect("Extras")
+    .group("Quality", ["eslint", "prettier"])
+    .group("Testing", ["vitest", "playwright"])
+    .group("Tooling", ["husky", "lint-staged"])
+    .max_rows(6)
     .ask()?;
 
-  let now = inline::confirm("Install dependencies now?").ask()?;
-
-  if now {
-    install(template)?;
+  if inline::confirm("Initialise a git repository?").ask()? {
+    inline::task("Initialising git", |report| {
+      report.say("git init");
+      thread::sleep(Duration::from_millis(300));
+      report.say("staging the scaffold");
+      thread::sleep(Duration::from_millis(400));
+      report.say("initial commit");
+      thread::sleep(Duration::from_millis(300));
+    })?;
   }
 
-  // `multiselect` hands back indices, so `EXTRAS` stays the source of truth.
+  let how = inline::select_key("Install dependencies now?")
+    .items([
+      ('y', "yes, install them"),
+      ('n', "no, later"),
+      ('p', "print the command and stop"),
+    ])
+    .ask()?;
+
+  match how {
+    0 => install(template)?,
+    2 => inline::log::warn(format!("run `{manager} install` when you are ready")),
+    _ => {}
+  }
+
+  // The grouped prompt hands back indices over the options alone, headings not counted, so
+  // the flat list stays the source of truth.
   let picked: Vec<&str> = extras.iter().map(|&i| EXTRAS[i]).collect();
-  let with = if picked.is_empty() {
-    template.name.to_owned()
-  } else {
-    format!("{} + {}", template.name, picked.join(", "))
-  };
 
-  let mut steps = vec![format!("cd {name}")];
-  if !now {
-    steps.push(format!("{manager} install"));
-  }
-  steps.push(format!("{manager} {}", template.dev));
-
-  // The outro indents every line after the first, so these stay bare.
-  let mut summary = vec![format!("✨ Scaffolded {name} with {with}")];
+  let mut summary = vec![format!("Scaffolded {name} with {}", template.name)];
 
   let about = about.trim();
   if !about.is_empty() {
@@ -206,10 +272,23 @@ fn main() -> Result<()> {
     summary.extend(about.lines().map(str::to_owned));
   }
 
+  if let Some(provider) = ai {
+    summary.push(String::new());
+    summary.push(format!("AI provider: {provider}"));
+  }
+  if !picked.is_empty() {
+    summary.push(format!("Extras: {}", picked.join(", ")));
+  }
+
   summary.push(String::new());
   summary.push("Next steps:".to_owned());
-  summary.extend(steps);
+  summary.push(format!("cd {name}"));
+  if how != 0 {
+    summary.push(format!("{manager} install"));
+  }
+  summary.push(format!("{manager} {}", template.dev));
 
+  // The outro indents every line after the first, so these stay bare.
   inline::outro(session).with(summary.join("\n"));
   Ok(())
 }
