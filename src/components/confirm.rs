@@ -93,6 +93,16 @@ impl Confirm {
   }
 }
 
+impl crate::components::Ask for Confirm {
+  fn answer(&self) -> String {
+    if self.value() { "Yes" } else { "No" }.to_owned()
+  }
+
+  fn controls(&self) -> &'static str {
+    "←→ or y/n · enter to submit"
+  }
+}
+
 impl Default for Confirm {
   fn default() -> Self {
     Self::new()

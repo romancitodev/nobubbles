@@ -61,6 +61,7 @@ pub struct Prompt<R> {
   state: PromptState,
   title: Cow<'static, str>,
   body: R,
+  hint: Option<Cow<'static, str>>,
 }
 
 impl<R> Prompt<R> {
@@ -69,7 +70,18 @@ impl<R> Prompt<R> {
       state,
       title: title.into(),
       body,
+      hint: None,
     }
+  }
+
+  /// A line of help alongside the closer, for the keys this prompt listens to.
+  ///
+  /// Only shown while the prompt is active: an answered one has nothing left to drive, and
+  /// a transcript full of key hints reads as noise.
+  #[must_use]
+  pub fn hint(mut self, hint: impl Into<Cow<'static, str>>) -> Self {
+    self.hint = Some(hint.into());
+    self
   }
 }
 
@@ -111,6 +123,11 @@ impl<R: Render> Render for Prompt<R> {
       let closer = body_height + 1;
       if closer < area.height {
         raw.set_string(area.x, area.y + closer, self.state.closer(), rail);
+
+        if let (PromptState::Active, Some(hint)) = (self.state, self.hint.as_ref()) {
+          let dim: ratatui::style::Style = Style::new().dim().into();
+          raw.set_string(area.x + GUTTER, area.y + closer, hint.as_ref(), dim);
+        }
       }
     }
 
@@ -167,6 +184,60 @@ mod tests {
     let prompt = Prompt::new(PromptState::Submitted, "Name", Text::new("bun"));
 
     assert_eq!(draw(prompt, 20, 4), ["◇  Name", "│  bun", "│", ""]);
+  }
+
+  #[test]
+  fn a_hint_rides_on_the_closer_while_the_prompt_is_active() {
+    let active = Prompt::new(PromptState::Active, "Name", Text::new("bun")).hint("enter to submit");
+    assert_eq!(
+      draw(active, 24, 4),
+      ["◆  Name", "│  bun", "└  enter to submit", ""]
+    );
+
+    let done =
+      Prompt::new(PromptState::Submitted, "Name", Text::new("bun")).hint("enter to submit");
+    assert_eq!(
+      draw(done, 24, 4),
+      ["◇  Name", "│  bun", "│", ""],
+      "answered, so no keys left"
+    );
+  }
+
+  /// End to end: a multiline `Input` inside the frame, after typing and a line break.
+  #[test]
+  fn a_multiline_input_grows_the_frame() {
+    use crate::components::input::Input;
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    let field = Input::new().multiline();
+    for code in [KeyCode::Char('a'), KeyCode::Enter, KeyCode::Char('b')] {
+      let _ = field.on_key(KeyEvent::from(code));
+    }
+
+    let prompt = Prompt::new(PromptState::Active, "Body", field);
+    assert_eq!(prompt.height(20), 4, "header, two rows, closer");
+
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(20, 5)).unwrap();
+    terminal
+      .draw(|frame| {
+        let area = frame.area().into();
+        let mut buf = Buffer::from(frame.buffer_mut());
+        prompt.render(area, &mut buf);
+      })
+      .unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    let lines: Vec<String> = (0..5)
+      .map(|y| {
+        (0..20)
+          .map(|x| buffer[(x, y)].symbol().to_owned())
+          .collect::<String>()
+          .trim_end()
+          .to_owned()
+      })
+      .collect();
+
+    assert_eq!(lines, ["◆  Body", "│  a", "│  b", "└", ""]);
   }
 
   #[test]
