@@ -18,12 +18,14 @@ pub(crate) fn inline<B: Backend>(backend: B, height: u16) -> Result<Terminal<B>,
   )
 }
 
+#[allow(dead_code, reason = "wired up by the fullscreen entry point, Fase 6")]
 pub(crate) fn fullscreen<B: Backend>(backend: B) -> Result<Terminal<B>, B::Error> {
   Terminal::new(backend)
 }
 
 /// Enables raw mode, enters the alt screen, and builds a fullscreen Terminal.
 /// TODO: no panic guard yet, that belongs with the Fase 3 loop.
+#[allow(dead_code, reason = "wired up by the fullscreen entry point, Fase 6")]
 pub(crate) fn enter_fullscreen() -> io::Result<Terminal<CrosstermBackend<Stdout>>> {
   enable_raw_mode()?;
   crossterm::execute!(io::stdout(), EnterAlternateScreen)?;
@@ -31,6 +33,7 @@ pub(crate) fn enter_fullscreen() -> io::Result<Terminal<CrosstermBackend<Stdout>
 }
 
 /// Reverse order of `enter_fullscreen`.
+#[allow(dead_code, reason = "wired up by the fullscreen entry point, Fase 6")]
 pub(crate) fn leave_fullscreen() -> io::Result<()> {
   crossterm::execute!(io::stdout(), LeaveAlternateScreen)?;
   disable_raw_mode()
