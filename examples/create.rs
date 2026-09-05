@@ -64,7 +64,6 @@ enum Step {
   Phase(&'static str),
   Fetching(&'static str),
   Ratio(f32),
-  Alive,
 }
 
 impl Step {
@@ -77,8 +76,6 @@ impl Step {
         current.set(0.0);
       }
       Self::Ratio(value) => current.set(value),
-      // Nothing new to report, but the job is alive and the spinner should say so.
-      Self::Alive => phase.tick(),
     }
   }
 }
@@ -86,10 +83,7 @@ impl Step {
 /// The worker. Resolves, installs one package at a time, links.
 fn work(template: Template, sender: &Emitter<Step>) {
   sender.send(Step::Phase("Resolving dependencies"));
-  for _ in 0..10 {
-    thread::sleep(Duration::from_millis(70));
-    sender.send(Step::Alive);
-  }
+  thread::sleep(Duration::from_millis(700));
 
   sender.send(Step::Phase("Installing"));
   for name in template.packages {
@@ -101,20 +95,21 @@ fn work(template: Template, sender: &Emitter<Step>) {
   }
 
   sender.send(Step::Phase("Linking"));
-  for _ in 0..6 {
-    thread::sleep(Duration::from_millis(70));
-    sender.send(Step::Alive);
-  }
+  thread::sleep(Duration::from_millis(420));
 }
 
 /// The install sits on the same rail as the questions, so it reads as one more step and
 /// not as something that escaped the session.
 fn board(phase: Progress, current: Progress, done: usize, total: usize) -> impl Render {
-  let rows = column![
-    phase,
-    current,
-    Text::new(format!("({done}/{total} packages)")).style(Style::new().dim().italic()),
-  ];
+  let counter = Text::new(format!("({done}/{total} packages)")).style(Style::new().dim().italic());
+
+  // The package bar only earns a row once a package started. While resolving it has no
+  // ratio and no label, and drawing it anyway leaves a spinner spinning over nothing.
+  let rows = if current.ratio().is_some() {
+    column![phase, current, counter]
+  } else {
+    column![phase, counter]
+  };
 
   Prompt::new(PromptState::Active, "Installing", rows)
 }
@@ -139,6 +134,9 @@ fn install(template: Template) -> Result<()> {
     });
 
     if installing {
+      // The phase is alive even on the frames where the package bar is the one with news,
+      // and a spinner that only moves when its own label changes reads as frozen.
+      phase.tick();
       cx.render(board(phase, current, done, total));
     } else {
       let done = Text::new(format!("Installed {total} packages")).style(Style::new().dim());
