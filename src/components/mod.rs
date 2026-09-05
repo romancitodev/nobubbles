@@ -1,7 +1,10 @@
 use ratatui::widgets::Widget;
 
+pub mod confirm;
 pub mod input;
+pub mod multiselect;
 pub mod progress;
+pub mod prompt;
 pub mod select;
 pub mod text;
 
