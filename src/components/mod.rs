@@ -6,6 +6,7 @@ pub mod multiselect;
 pub mod progress;
 pub mod prompt;
 pub mod select;
+pub mod select_key;
 pub mod text;
 
 /// A rectangular area, wrapping ratatui's own. kept as a newtype so
@@ -116,6 +117,14 @@ pub trait Ask {
   /// The keys this listens to, shown next to the closer while it's active.
   fn controls(&self) -> &'static str {
     "enter to submit"
+  }
+
+  /// Whether this considers itself answered without waiting for Enter.
+  ///
+  /// Almost nothing does. A key-driven pick is the exception: the key that chooses is also
+  /// the key that ends the prompt, and there is nothing left to confirm.
+  fn done(&self) -> bool {
+    false
   }
 }
 

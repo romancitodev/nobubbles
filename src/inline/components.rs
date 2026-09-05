@@ -12,9 +12,13 @@ use crate::{
 };
 
 pub mod confirm;
+pub mod group_multiselect;
 pub mod input;
 pub mod multiselect;
+pub mod password;
 pub mod select;
+pub mod select_key;
+pub mod task;
 
 /// Runs one prompt on the rail until it's submitted, then leaves it drawn as answered.
 ///
@@ -48,7 +52,8 @@ pub(crate) fn ask<W: Render + Ask + Copy>(
       // `ctrl+s` always submits. So does an Enter the widget turned down, and that `bool` is
       // the whole protocol: a multiline `Input` consumes Enter to break the line and stays
       // put, everything else lets it through and ends the prompt (D-015).
-      if is_submit(key) || (!on_key(key) && key.code == KeyCode::Enter) {
+      let wanted = on_key(key);
+      if is_submit(key) || widget.done() || (!wanted && key.code == KeyCode::Enter) {
         match check(&widget.answer()) {
           Ok(()) => {
             submitted.set(true);
