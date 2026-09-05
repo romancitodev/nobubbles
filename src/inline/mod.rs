@@ -7,10 +7,10 @@
 
 mod components;
 
-pub use components::confirm::confirm;
-pub use components::input::{input, multiline};
-pub use components::multiselect::multiselect;
-pub use components::select::select;
+pub use components::confirm::{Confirm, confirm};
+pub use components::input::{Text, input};
+pub use components::multiselect::{MultiSelect, multiselect};
+pub use components::select::{Select, Strict, select};
 
 use crossterm::style::Stylize;
 
@@ -63,7 +63,7 @@ impl Drop for Session {
 /// use nobubbles::inline;
 ///
 /// let session = inline::intro("Config")?.fps(60);
-/// let name = inline::input("What's your name?")?;
+/// let name = inline::input("What's your name?").ask()?;
 /// inline::outro(session).with("Done");
 /// # Ok::<(), eyre::Report>(())
 /// ```

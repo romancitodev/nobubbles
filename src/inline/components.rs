@@ -22,12 +22,25 @@ pub mod select;
 /// anchors below and the rail joins the two. A widget never has to know what submitting
 /// means; it only says whether it wanted the key, and `ask` reads Enter as a yes when it
 /// didn't.
+/// A refusal, with the reason to show on the closer.
+pub(crate) type Check<'a> = &'a dyn Fn(&str) -> Result<(), String>;
+
+/// A validator a builder is holding on to until it runs.
+pub(crate) type Validator<'a> = Box<dyn Fn(&str) -> Result<(), String> + 'a>;
+
+/// Nothing to check. Every prompt without a `validate` uses this.
+pub(crate) fn always_ok(_: &str) -> Result<(), String> {
+  Ok(())
+}
+
 pub(crate) fn ask<W: Render + Ask + Copy>(
   title: &str,
   widget: W,
   mut on_key: impl FnMut(KeyEvent) -> bool,
+  check: Check<'_>,
 ) -> eyre::Result<()> {
   let submitted = signal(false);
+  let refused = signal(Option::<String>::None);
   let title = title.to_owned();
 
   Inline::run(signals::fps(), |cx| {
@@ -36,8 +49,17 @@ pub(crate) fn ask<W: Render + Ask + Copy>(
       // the whole protocol: a multiline `Input` consumes Enter to break the line and stays
       // put, everything else lets it through and ends the prompt (D-015).
       if is_submit(key) || (!on_key(key) && key.code == KeyCode::Enter) {
-        submitted.set(true);
-        signals::quit();
+        match check(&widget.answer()) {
+          Ok(()) => {
+            submitted.set(true);
+            signals::quit();
+          }
+          // Refused, not cancelled: the prompt stays live and says why.
+          Err(why) => refused.set(Some(why)),
+        }
+      } else {
+        // Any edit clears the complaint, so it doesn't outlive what caused it.
+        refused.set(None);
       }
     }
 
@@ -46,6 +68,8 @@ pub(crate) fn ask<W: Render + Ask + Copy>(
     if submitted.get() {
       let answer = Text::new(widget.answer()).style(Style::new().dim());
       cx.render(Prompt::new(PromptState::Submitted, title.clone(), answer));
+    } else if let Some(why) = refused.get() {
+      cx.render(Prompt::new(PromptState::Error, title.clone(), widget).hint(why));
     } else {
       cx.render(Prompt::new(PromptState::Active, title.clone(), widget).hint(widget.controls()));
     }
