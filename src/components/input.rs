@@ -15,6 +15,7 @@ pub struct Input {
   value: Signal<String>,
   cursor: Signal<usize>,
   multiline: Signal<bool>,
+  masked: Signal<bool>,
 }
 
 impl Input {
@@ -29,6 +30,25 @@ impl Input {
       value: signal(initial.into()),
       cursor: signal(0),
       multiline: signal(false),
+      masked: signal(false),
+    }
+  }
+
+  /// Draws a dot per grapheme instead of the text, and answers with dots too, so a password
+  /// never reaches the screen or the transcript.
+  #[must_use]
+  pub fn masked(self) -> Self {
+    self.masked.set(true);
+    self
+  }
+
+  /// What to draw: the value, or one dot per grapheme.
+  fn shown(&self) -> String {
+    let value = self.value.get();
+    if self.masked.get() {
+      "•".repeat(value.graphemes(true).count())
+    } else {
+      value
     }
   }
 
@@ -127,7 +147,7 @@ impl Input {
 
 impl crate::components::Ask for Input {
   fn answer(&self) -> String {
-    self.value()
+    self.shown()
   }
 
   fn controls(&self) -> &'static str {
@@ -148,15 +168,12 @@ impl Default for Input {
 impl Render for Input {
   fn height(&self, _: u16) -> u16 {
     // `split` and not `lines`, because a trailing newline is a row you can still type on.
-    let rows = self
-      .value
-      .with_ref(|value| value.split('\n').count())
-      .max(1);
+    let rows = self.shown().split('\n').count().max(1);
     u16::try_from(rows).unwrap_or(u16::MAX)
   }
 
   fn render(self, area: super::Rect, buf: &mut super::Buffer<'_>) {
-    let value = self.value.get();
+    let value = self.shown();
     let typed: String = value.graphemes(true).take(self.cursor.get()).collect();
 
     // The row is how many newlines the cursor is past; the column is the width of what's
