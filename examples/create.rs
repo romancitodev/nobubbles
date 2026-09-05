@@ -11,11 +11,12 @@ use std::time::Duration;
 use eyre::Result;
 use nobubbles::app::Inline;
 use nobubbles::column;
+use nobubbles::components::prompt::{Prompt, PromptState};
 use nobubbles::components::{Render, progress::Progress, text::Text};
 use nobubbles::effects::{self, Emitter};
 use nobubbles::inline;
 use nobubbles::signals::quit;
-use nobubbles::style::{Color, Style};
+use nobubbles::style::Style;
 
 /// Ticks per package, so a bar moves instead of jumping.
 const TICKS: u32 = 10;
@@ -97,12 +98,16 @@ fn work(template: Template, sender: &Emitter<Step>) {
   }
 }
 
+/// The install sits on the same rail as the questions, so it reads as one more step and
+/// not as something that escaped the session.
 fn board(phase: Progress, current: Progress, done: usize, total: usize) -> impl Render {
-  column![
+  let rows = column![
     phase,
     current,
     Text::new(format!("({done}/{total} packages)")).style(Style::new().dim().italic()),
-  ]
+  ];
+
+  Prompt::new(PromptState::Active, "Installing", rows)
 }
 
 fn install(template: Template) -> Result<()> {
@@ -127,9 +132,8 @@ fn install(template: Template) -> Result<()> {
     if installing {
       cx.render(board(phase, current, done, total));
     } else {
-      cx.render(
-        Text::new(format!("Installed {total} packages")).style(Style::new().fg(Color::LightGreen)),
-      );
+      let done = Text::new(format!("Installed {total} packages")).style(Style::new().dim());
+      cx.render(Prompt::new(PromptState::Submitted, "Installing", done));
       quit();
     }
   })
@@ -139,6 +143,7 @@ fn main() -> Result<()> {
   let session = inline::intro("create-nobubbles")?;
 
   let name = inline::input("Project name")?;
+  let about = inline::multiline("Description")?;
   let template = TEMPLATES[inline::select("Template", TEMPLATES.map(|t| t.name))?];
   let manager = MANAGERS[inline::select("Package manager", MANAGERS)?];
   let extras = inline::multiselect("Anything else?", EXTRAS)?;
@@ -163,15 +168,18 @@ fn main() -> Result<()> {
   steps.push(format!("{manager} {}", template.dev));
 
   // The outro indents every line after the first, so these stay bare.
-  inline::outro(session).with(format!(
-    "✨ Scaffolded {name} with {with}
+  let mut summary = vec![format!("✨ Scaffolded {name} with {with}")];
 
-Next steps:
-{}",
-    steps.join(
-      "
-"
-    )
-  ));
+  let about = about.trim();
+  if !about.is_empty() {
+    summary.push(String::new());
+    summary.extend(about.lines().map(str::to_owned));
+  }
+
+  summary.push(String::new());
+  summary.push("Next steps:".to_owned());
+  summary.extend(steps);
+
+  inline::outro(session).with(summary.join("\n"));
   Ok(())
 }
