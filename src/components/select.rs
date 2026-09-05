@@ -146,6 +146,16 @@ impl Select {
   }
 }
 
+impl crate::components::Ask for Select {
+  fn answer(&self) -> String {
+    self.value().map(Cow::into_owned).unwrap_or_default()
+  }
+
+  fn controls(&self) -> &'static str {
+    "↑↓ to move · enter to submit"
+  }
+}
+
 impl Render for Select {
   fn height(&self, _: u16) -> u16 {
     self.window().len() as u16

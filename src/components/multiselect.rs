@@ -23,6 +23,8 @@ pub struct MultiSelectStyle {
   pub cursor: Style,
   /// Everything else, box and label together.
   pub inactive: Style,
+  /// Most rows drawn at once. `None` draws the whole list, however long it is.
+  pub max_rows: Option<u16>,
 }
 
 impl Default for MultiSelectStyle {
@@ -33,6 +35,7 @@ impl Default for MultiSelectStyle {
       checked: Style::new().fg(Color::Green),
       cursor: Style::new().fg(Color::Cyan),
       inactive: Style::new().dim(),
+      max_rows: None,
     }
   }
 }
@@ -53,6 +56,8 @@ pub struct MultiSelect {
   options: Signal<Vec<Cow<'static, str>>>,
   checked: Signal<Vec<bool>>,
   cursor: Signal<usize>,
+  /// First row of the window into `options`. Only moves when the cursor would leave it.
+  offset: Signal<usize>,
   style: Signal<MultiSelectStyle>,
 }
 
@@ -63,8 +68,56 @@ impl MultiSelect {
       checked: signal(vec![false; options.len()]),
       options: signal(options),
       cursor: signal(0),
+      offset: signal(0),
       style: signal(MultiSelectStyle::default()),
     }
+  }
+
+  /// Shows at most `rows` options at a time, scrolling to keep the cursor in view.
+  #[must_use]
+  pub fn max_rows(self, rows: u16) -> Self {
+    self
+      .style
+      .update(|style| style.max_rows = Some(rows.max(1)));
+    self
+  }
+
+  /// Moves the window the least it can to keep the cursor inside it.
+  ///
+  /// Called from `on_key` and never from `render`: writing a signal while drawing marks the
+  /// view dirty, and the loop would repaint forever.
+  fn scroll_into_view(&self) {
+    let Some(rows) = self.style.get().max_rows.map(|rows| rows as usize) else {
+      return;
+    };
+
+    let len = self.options.with_ref(Vec::len);
+    let cursor = self.cursor.get();
+    let last_offset = len.saturating_sub(rows);
+
+    self.offset.update(|offset| {
+      if cursor < *offset {
+        // Includes wrapping from the top: the cursor lands on the last row and the window
+        // jumps down with it.
+        *offset = cursor;
+      } else if cursor >= *offset + rows {
+        *offset = cursor + 1 - rows;
+      }
+      *offset = (*offset).min(last_offset);
+    });
+  }
+
+  /// The rows currently on screen, as a range into `options`.
+  fn window(&self) -> std::ops::Range<usize> {
+    let len = self.options.with_ref(Vec::len);
+    let rows = self
+      .style
+      .get()
+      .max_rows
+      .map_or(len, |rows| (rows as usize).min(len));
+
+    let offset = self.offset.get().min(len.saturating_sub(rows));
+    offset..offset + rows
   }
 
   /// Replaces the style.
@@ -81,6 +134,7 @@ impl MultiSelect {
         let len = self.options.with_ref(Vec::len);
         if len > 0 {
           self.cursor.update(|at| *at = (*at + len - 1) % len);
+          self.scroll_into_view();
         }
         true
       }
@@ -88,6 +142,7 @@ impl MultiSelect {
         let len = self.options.with_ref(Vec::len);
         if len > 0 {
           self.cursor.update(|at| *at = (*at + 1) % len);
+          self.scroll_into_view();
         }
         true
       }
@@ -133,20 +188,38 @@ impl MultiSelect {
   }
 }
 
+impl crate::components::Ask for MultiSelect {
+  fn answer(&self) -> String {
+    let picked = self.values();
+    if picked.is_empty() {
+      "none".to_owned()
+    } else {
+      picked.join(", ")
+    }
+  }
+
+  fn controls(&self) -> &'static str {
+    "↑↓ to move · space to toggle · enter to submit"
+  }
+}
+
 impl Render for MultiSelect {
   fn height(&self, _: u16) -> u16 {
-    self.options.with_ref(|options| options.len()) as u16
+    self.window().len() as u16
   }
 
   fn render(self, area: super::Rect, buf: &mut super::Buffer<'_>) {
     let cursor = self.cursor.get();
     let style = self.style.get();
     let checked = self.checked.get();
+    let window = self.window();
 
     let lines: Vec<Line> = self.options.with_ref(|options| {
       options
         .iter()
         .enumerate()
+        .skip(window.start)
+        .take(window.len())
         .map(|(i, option)| {
           let ticked = checked.get(i).copied().unwrap_or(false);
           let symbol = if ticked {
@@ -222,5 +295,23 @@ mod tests {
   fn enter_is_left_for_the_caller() {
     let list = MultiSelect::new(["one"]);
     assert!(!list.on_key(press(KeyCode::Enter)));
+  }
+
+  #[test]
+  fn the_window_follows_the_cursor_around_the_wrap() {
+    let list = MultiSelect::new((0..10).map(|n| n.to_string())).max_rows(3);
+    assert_eq!(list.height(20), 3, "as tall as the window, not the list");
+
+    for _ in 0..3 {
+      list.on_key(press(KeyCode::Down));
+    }
+    assert_eq!(list.window(), 1..4, "scrolled by one, the least it could");
+
+    list.on_key(press(KeyCode::Up));
+    list.on_key(press(KeyCode::Up));
+    list.on_key(press(KeyCode::Up));
+    list.on_key(press(KeyCode::Up));
+    assert_eq!(list.cursor(), 9, "wrapped off the top");
+    assert_eq!(list.window(), 7..10, "and the window went with it");
   }
 }
