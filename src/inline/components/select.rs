@@ -16,9 +16,7 @@ pub fn select(
   options: impl IntoIterator<Item: Into<Cow<'static, str>>>,
 ) -> Result<usize> {
   let list = Select::new(options.into_iter());
-  ask(prompt, list, |key| {
-    let _ = list.on_key(key);
-  })?;
+  ask(prompt, list, |key| list.on_key(key))?;
 
   Ok(list.selected())
 }

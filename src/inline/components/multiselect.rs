@@ -15,9 +15,7 @@ pub fn multiselect(
   options: impl IntoIterator<Item: Into<Cow<'static, str>>>,
 ) -> Result<Vec<usize>> {
   let list = MultiSelect::new(options);
-  ask(prompt, list, |key| {
-    let _ = list.on_key(key);
-  })?;
+  ask(prompt, list, |key| list.on_key(key))?;
 
   Ok(list.selected())
 }

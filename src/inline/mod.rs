@@ -8,7 +8,7 @@
 mod components;
 
 pub use components::confirm::confirm;
-pub use components::input::input;
+pub use components::input::{input, multiline};
 pub use components::multiselect::multiselect;
 pub use components::select::select;
 
