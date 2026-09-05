@@ -46,7 +46,7 @@ pub struct Progress {
   label: Signal<String>,
   ratio: Signal<Option<f32>>,
   style: Signal<ProgressStyle>,
-  tick: Signal<usize>,
+  spinner: Signal<usize>,
 }
 
 impl Progress {
@@ -61,7 +61,7 @@ impl Progress {
       label: signal(label.into()),
       ratio: signal(None),
       style: signal(ProgressStyle::default()),
-      tick: signal(0),
+      spinner: signal(0),
     }
   }
 
@@ -84,13 +84,13 @@ impl Progress {
   /// the bar underneath panics on them.
   pub fn set(&self, ratio: f32) {
     self.ratio.set(Some(ratio.clamp(0.0, 1.0)));
-    self.advance();
+    self.tick();
   }
 
   /// Replaces the label. Reporting a new one counts as progress, so the spinner moves.
   pub fn set_label(&self, label: impl Into<String>) {
     self.label.set(label.into());
-    self.advance();
+    self.tick();
   }
 
   /// The text next to the bar.
@@ -108,10 +108,14 @@ impl Progress {
     self.ratio.get().is_some_and(|r| r >= 1.0)
   }
 
-  /// Moves the spinner one frame on. Driven by news, not by a timer: a progress nobody is
-  /// updating freezes instead of pinning the loop at the frame rate forever.
-  fn advance(&self) {
-    self.tick.update(|t| *t = t.wrapping_add(1));
+  /// Moves the spinner one frame on.
+  ///
+  /// [`Progress::set`] and [`Progress::set_label`] already do this, so most code never calls
+  /// it. Reach for it when a job is alive but has nothing new to say: the spinner is driven
+  /// by news, not by a timer, so a job that stops reporting freezes rather than pinning the
+  /// loop at the frame rate forever.
+  pub fn tick(&self) {
+    self.spinner.update(|frame| *frame = frame.wrapping_add(1));
   }
 }
 
@@ -143,7 +147,7 @@ impl Render for Progress {
         Widget::render(bar, area, buf.inner_mut());
       }
       None => {
-        let frame = SPINNER[self.tick.get() % SPINNER.len()];
+        let frame = SPINNER[self.spinner.get() % SPINNER.len()];
         let line = Line::from(vec![
           Span::styled(frame, style.filled),
           Span::raw(" "),
@@ -247,11 +251,12 @@ mod tests {
   #[test]
   fn reporting_progress_moves_the_spinner() {
     let job = Progress::new();
-    let start = job.tick.get();
+    let start = job.spinner.get();
 
     job.set_label("resolving");
     job.set(0.1);
+    job.tick();
 
-    assert_eq!(job.tick.get(), start + 2);
+    assert_eq!(job.spinner.get(), start + 3);
   }
 }
