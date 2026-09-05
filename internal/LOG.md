@@ -29,6 +29,79 @@ que no se puede reconstruir leyendo el código.
 
 ---
 
+## 2026-09-05 — Fases 4 y 5: prompts, estilo y efectos
+
+**Hecho:**
+- Bug del viewport al achicar, resuelto. `reanchor` en `engine.rs`: `Terminal::clear`
+  **restaura** el cursor a donde lo dejó el draw, y un `Terminal` inline nuevo se ancla
+  donde esté el cursor, así que achicar de 2 a 1 fila re-anclaba una fila más abajo.
+- `park_below`: al salir, el cursor queda en la fila de abajo del viewport. Eso es el
+  transcript entero — cada prompt deja su último frame pintado y el siguiente se ancla
+  debajo. Es el mismo mecanismo de anclaje que `reanchor`, del otro lado.
+- `clear_dirty()` pasó a correr **antes** del draw. Corría después y borraba lo que el
+  propio frame acababa de escribir, así que ninguna vista viva podía existir.
+- Ctrl+C intercepta en `poll`, sale con `Err(Cancelled)` y el guard de raw mode dropea.
+- `Ctx::render` toma `impl Render` y no `&impl Component` (D-017).
+- `inline::{intro, input, select, multiline, confirm, multiselect, outro}` sobre un `ask`
+  compartido, más `Session`, un guard RAII de raw mode con contador de anidamiento.
+- Componentes: `Text`, `Progress`, `Select`, `MultiSelect`, `Confirm`, `Prompt` (el riel de
+  cliclack), `Column: FromIterator`.
+- `src/style.rs`: `Color` y `Style` propios, con conversión en el borde (D-019).
+- `src/effects.rs`: `Inbox`/`Emitter`, el canal de trabajo de fondo (D-018).
+- Ejemplos: `progress`, `build` (20 crates, 4 cores), `create` (scaffolder tipo `bun create`),
+  `input-inline`.
+- 57 tests, cero warnings.
+
+**Aprendido:**
+- `Terminal::clear()` documenta que **preserva** el cursor. Combinado con que
+  `compute_inline_size` ancla el viewport en `backend.get_cursor_position()`, eso es todo el
+  bug de achicar. Crecer andaba de casualidad: con 1 fila el cursor ya estaba en el origen.
+- Un signal escrito **durante** `render` marca la vista sucia y el loop repinta para siempre.
+  Por eso el spinner del `Progress` avanza con las noticias y el offset del `Select` se
+  ajusta en `on_key`. Es un pozo fácil de reintroducir.
+- `ctrl+enter` no sirve como tecla: la mayoría de las terminales lo mandan como un Enter
+  pelado. `ctrl+s` llega bien (verificado en la terminal del autor).
+- El `bool` de `on_key` alcanzó para resolver el choque de Enter en el multilínea, sin
+  agregar nada al trait. Es D-015 haciendo exactamente lo que se diseñó para hacer.
+- `Arc::strong_count` sobre un `Arc<()>` es una liveness por instancia, sin estado global.
+- `cargo fmt` con la config del repo reacomoda bastante; conviene correrlo antes de commitear
+  y no después.
+
+**Callejones sin salida:**
+- **Componente `Jobs`** (filas de progress manejadas por workers). Descartado: un tipo con un
+  solo caso de uso y con el protocolo de la app (`Update`) metido adentro de la librería. Lo
+  genérico que quedaba abajo era el canal, y eso es `effects::inbox`.
+- **`static IN_FLIGHT: AtomicUsize`** para saber si había trabajo de fondo. Descartado: estado
+  global de proceso, no testeable en paralelo, y sobraba entero — `Inbox::drain` marca dirty
+  mientras haya emitters vivos y el loop ya sabe despertarse con eso.
+- **`#[expect(dead_code)]`** en `render::fullscreen`: da `unfulfilled_lint_expectation` porque
+  rustc reporta sólo la raíz del grupo muerto (`enter_fullscreen`), no lo que ésta llama. Va
+  con `allow`.
+- **`while let Some(x) = queue.lock().unwrap().pop()`** mantiene el `MutexGuard` vivo durante
+  todo el cuerpo. Los cuatro workers de `examples/build.rs` se hubieran serializado. Va con
+  `let ... else` adentro de un `loop`.
+- Diagnóstico equivocado del multilínea: sospeché binario viejo y `ctrl+s` comido por la
+  terminal. Los dos eventos llegaban perfectos; el feature simplemente no estaba cableado en
+  el ejemplo que el autor corría.
+
+**Abierto:**
+- **El builder de prompts.** `inline::*` no llega a `max_rows` ni a `multiline` sin funciones
+  hermanas, y detrás vienen `hint`, `initial` y `optional`. Es lo primero que sigue.
+- Validación: `ask` envía con Enter sin preguntar. Falta el gancho y el `PromptState::Error`
+  (`▲` amarillo), que el enum ya contempla pero nadie construye.
+- Esc no cancela, sólo Ctrl+C.
+- `Input` sin scroll horizontal, y sin `Up`/`Down` entre filas en multilínea (`Left`/`Right`
+  sí cruzan, porque el `
+` es un grafema).
+- Filtro en select/multiselect y hint en el ítem activo: los toma el autor.
+- Los commits de esta sesión no compilan sueltos: `lib.rs` y `components/mod.rs` declaran los
+  módulos de todos y van enteros en el primero de cada tanda.
+
+**Siguiente:**
+- El builder de prompts. Todo lo demás de la lista de arriba se cuelga de él.
+
+---
+
 ## 2026-09-03 (d) — Fase 4: arranque de Input
 
 **Hecho:**

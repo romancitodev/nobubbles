@@ -446,3 +446,135 @@ de su módulo contenedor, así que un `pub struct Rect` dentro de un
 **Se revisa si:** la capa de conversión crece tanto que se vuelve el archivo
 más grande del crate sin que nadie haya cambiado de backend — ahí vale
 preguntarse si compró algo real.
+
+
+---
+
+## D-017 — `Ctx::render` toma `impl Render`, no un `Component`
+
+**Estado:** aceptada · 2026-09-05
+
+**Por qué:** la Fase 5 necesita renderizar cosas que no son un `Component` —
+`inline::input` dibuja un `column![...]` armado en el momento, no un struct del
+usuario. Las dos salidas eran un struct privado con su `impl Component` por
+prompt (cuatro structs de andamio) o una firma que acepte cualquier `Render`.
+
+```rust
+pub fn render(&mut self, view: impl Render)   // antes: &impl Component
+```
+
+Un `Component` pasa `c.view()`, que es una llamada más en el único lugar que lo
+usa.
+
+**Consecuencia incómoda:** después de este cambio **ningún tipo de la librería
+implementa `Component`**. `Input`, `Select`, `Progress` y compañía implementan
+`Render` directo; los prompts inline no construyen ninguno. El único
+implementador en todo el repo es el `Form` de un ejemplo.
+
+**Por qué el trait se queda igual:** las razones de D-006 son sobre `&self`, no
+sobre el trait. Que `field.value()` funcione después de que el loop terminó es
+lo que hace posible toda la Fase 5, y eso lo da `&self` + signals, no
+`Component`.
+
+**Se revisa si:** la Fase 6 llega y los contenedores (`Tabs`, `List`, `Panel`)
+no necesitan un trait para rutear eventos a hijos desconocidos. Si no lo
+necesitan, `Component` no tiene razón de existir y se borra.
+
+---
+
+## D-018 — El canal de efectos lleva **datos**, no closures
+
+**Estado:** aceptada · 2026-09-05 (corrige D-010)
+
+**El agujero:** D-010 dice que el canal lleva `Box<dyn FnOnce() + Send>` y que
+el worker "captura el resultado en una closure". **Esa closure no compila.** Si
+captura un `Signal<T>`, y D-013 hace que `Signal` sea `!Send`, la closure es
+`!Send` y no cruza el canal. Las dos decisiones se contradicen en el caso exacto
+para el que se escribieron.
+
+**Resolución:** el canal lleva un `T: Send` que define la app, y los handles de
+signal se quedan del lado del loop.
+
+```rust
+let inbox = effects::inbox::<Update>();      // Update es de la app
+inbox.spawn(|tx| { /* trabajo, tx.send(...) */ });
+let sigue = inbox.drain(|update| update.apply(&rows));   // corre en el loop
+```
+
+**Dos cosas que van juntas y por eso son una sola llamada:**
+1. `drain` lee la liveness **antes** de aplicar, así que un `false` nunca deja
+   nada encolado atrás. Que fueran dos llamadas era un orden que cada app iba a
+   tener que redescubrir.
+2. Mientras haya trabajo vivo, `drain` marca la vista sucia. Sin eso el loop
+   dormiría su timeout de idle, y como drenar sólo pasa adentro del closure de
+   ui, una vista que dejó de dibujar dejaría de drenar.
+
+**Descartado:** un contador global de trabajo en vuelo (`static AtomicUsize`).
+Estado de proceso, no testeable en paralelo, y no hacía falta: la liveness es el
+`Arc::strong_count` del propio inbox, por instancia.
+
+**Se revisa si:** aparece un caso donde el worker tenga que decidir *qué* hacerle
+al estado y no sólo reportar. Ahí la closure vuelve a tener sentido, y con ella
+un handle `Send` que se resuelva del lado del loop.
+
+---
+
+## D-019 — Vocabulario de estilo propio, y `Text` como primitiva
+
+**Estado:** aceptada · 2026-09-05
+
+**Lo que pasó:** D-016 dice que ratatui no aparece en ninguna firma pública. Se
+cumplía al pie de la letra y se rompía donde importa: **todos los ejemplos
+importaban `ratatui::widgets::Paragraph`**, porque no había otra forma de poner
+un string en pantalla. El blanket `impl<W: Widget> Render for W` hacía que el
+camino fácil fuera reachear ratatui.
+
+**Decisión, dos partes:**
+1. `components::text::Text` — una tirada de texto con un estilo. Es la primitiva
+   que faltaba, y con ella los ejemplos no importan ratatui en ninguna línea.
+2. `style::{Color, Style}` **propios**, no newtypes. `Color` son los 16 ANSI más
+   `Rgb`; `Style` es `fg`, `bg`, `bold`, `dim`, `italic`, con builders
+   encadenables y un `From` en el borde.
+
+**Por qué propios y no un newtype:** lipgloss *es* un vocabulario. Envolver el
+`Style` de ratatui sería el mismo tipo con otro nombre; esto es la semilla del
+theme, y crece con lo que los widgets pintan de verdad y no con lo que ratatui
+soporta.
+
+**Ojo con qué es lipgloss:** lo lindo no sale del `Style`, sale de los verbos de
+layout que ratatui no da y que la Fase 5 lista — `width()` con wrapping
+ANSI-aware, `align()`, `margin`, `join_h`/`join_v`. El `Style` es la parte fácil.
+
+**Se revisa si:** un widget necesita un atributo que no está (`underline`,
+`strikethrough`, `blink`). Se agrega el campo, no se cambia el enfoque.
+
+---
+
+## D-020 — Enviar un prompt lo decide el `bool` de `on_key`
+
+**Estado:** aceptada · 2026-09-05
+
+**El choque:** un `Input` multilínea quiere Enter para partir la línea, y todos
+los demás prompts quieren Enter para enviar. `ask` interceptaba Enter **antes**
+de que el widget lo viera, así que multilínea era imposible.
+
+**Resolución, sin agregar nada al trait:**
+
+```rust
+if is_submit(key) || (!on_key(key) && key.code == KeyCode::Enter) {
+```
+
+El widget dice si quiso la tecla. Un multilínea se queda con Enter y no se
+envía; todos los demás lo rechazan y el prompt termina. Es exactamente el `bool`
+que D-015 puso ahí.
+
+**Por qué `ctrl+s` y no `ctrl+enter`:** la mayoría de las terminales mandan
+`ctrl+enter` como un Enter pelado, así que serían indistinguibles justo en el
+widget donde importa. `ctrl+s` llega bien (verificado sobre Windows Terminal).
+Es también el alias que el autor había terminado usando en `simple-commits`.
+
+**Consecuencia:** `Input::on_key` ignora cualquier `Char` con CONTROL. Sin eso,
+`ctrl+s` escribía una `s`.
+
+**Se revisa si:** se adopta el protocolo de teclado de Kitty, donde `ctrl+enter`
+sí es distinguible.

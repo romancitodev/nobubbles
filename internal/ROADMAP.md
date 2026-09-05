@@ -7,13 +7,17 @@ mensajes, y con modo inline (cliclack) como ciudadano de primera.
 
 ## Estado
 
-**Fase 2 lista.** `src/render.rs`: constructores `inline`/`fullscreen`
-genéricos sobre `Backend` (testeados con `TestBackend`, sin terminal real), más
-`enter_fullscreen`/`leave_fullscreen` para el caso real con crossterm. 4 tests
-en verde: altura fija del inline, área completa del fullscreen, crecer/encoger
-recreando el `Terminal`, e `insert_before` sin romper el scrollback.
+**Fases 3 y 4 listas, Fase 5 en curso.** El motor (`engine.rs`) maneja viewport
+inline dinámico, transcript entre corridas, Ctrl+C y frames auto-sostenidos.
+Componentes: `Text`, `Input` (multilínea, caret), `Select` y `MultiSelect` (con
+ventana de scroll), `Confirm`, `Progress`, `Column`, y `Prompt`, el riel de
+cliclack. `inline::{intro, input, multiline, select, confirm, multiselect, outro}`
+funcionan de punta a punta. `style.rs` tiene vocabulario propio (D-019) y
+`effects.rs` el canal de trabajo de fondo (D-018). 57 tests.
 
-D-006 confirmada. **Siguiente: Fase 3 (Component + loop nuevo).**
+**Siguiente: el builder de prompts.** `inline::*` no llega a `max_rows` ni a
+`multiline` sin funciones hermanas, y detrás vienen `hint`, `initial`, `optional`
+y la validación. Todo lo que falta de la Fase 5 se cuelga de ahí.
 
 ---
 
@@ -39,14 +43,14 @@ Excepción: el esqueleto del loop, que sí sobrevive. Por eso vale terminar el W
 
 Rust puro, sin terminal, sin tocar nada de lo que existe. Se testea con asserts.
 
-- [ ] Arena thread-local: `thread_local!` con un `RefCell<Vec<Box<dyn Any>>>`
-- [ ] `Signal<T>(usize, PhantomData<T>)` — `Copy` porque es un índice, no un `Rc`.
+- [x] Arena thread-local: `thread_local!` con un `RefCell<Vec<Box<dyn Any>>>`
+- [x] `Signal<T>(usize, PhantomData<T>)` — `Copy` porque es un índice, no un `Rc`.
       Esto mata toda la ceremonia de clonar antes de cada closure.
-- [ ] `signal(v)`, `.get()`, `.set(v)`, `.update(...)`
-- [ ] `ReadSignal<T>` y `WriteSignal<T>`: mismo índice, misma slot, distintos
+- [x] `signal(v)`, `.get()`, `.set(v)`, `.update(...)`
+- [x] `ReadSignal<T>` y `WriteSignal<T>`: mismo índice, misma slot, distintos
       tipos. `Signal::split()` y `.read_only()`. Ver D-008 — va desde el día uno
       porque agregarlo después es breaking, no porque acelere nada hoy.
-- [ ] Flag global de dirty: toda escritura lo prende, el loop lo lee y lo apaga.
+- [x] Flag global de dirty: toda escritura lo prende, el loop lo lee y lo apaga.
 
 **Explícitamente NO:** grafo de dependencias, memos, efectos, orden topológico.
 El split read/write de D-008 sí entra: son tipos, no tracking. Se re-renderiza la
@@ -99,7 +103,7 @@ medio al que quedó del WIP.
       función pura, 3 tests.
 - [x] `trait Component` con `view(&self) -> impl Render`, más `Render`/`Rect`/
       `Buffer` como newtypes sobre ratatui (D-016). `src/components/mod.rs`.
-- [ ] `on_key(&self, k: Key) -> bool` en los widgets que lo necesiten — `true`
+- [x] `on_key(&self, k: Key) -> bool` en los widgets que lo necesiten — `true`
       = consumido. Reemplaza `Handled` (D-015): ya no hay un valor de retorno
       con semántica de "salir". Se agrega recién cuando `Input` (Fase 4) lo
       necesite, no antes.
@@ -179,8 +183,10 @@ pastosa, o quema CPU.
 
 ## Fase 4 — Componentes de prompt
 
-- [ ] `Text`, `Input`, `Select`, `MultiSelect`, `Confirm`, `Spinner`, `Progress`
-- [ ] Cada uno con su `*Style` con las partes nombradas.
+- [x] `Text`, `Input`, `Select`, `MultiSelect`, `Confirm`, `Progress`. El spinner
+      quedó adentro de `Progress`, que sin fracción gira y con fracción dibuja barra.
+- [x] Cada uno con su `*Style` con las partes nombradas. `Theme` global sigue sin
+      hacerse: se decide cuando haya algo que compartir de verdad.
 
 `Input` borrando: sobre `Signal<String>`, y ojo con grafemas compuestos — un
 emoji con modificador de tono no se borra bien con un `pop()`.
@@ -189,8 +195,11 @@ emoji con modificador de tono no se borra bien con un `pop()`.
 
 ## Fase 5 — Inline API + capa lipgloss
 
-- [ ] `inline::{intro, input, select, confirm, spinner, outro}` — cada prompt es
-      un `inline::app` de un componente que corre hasta completarse.
+- [x] `inline::{intro, input, multiline, select, confirm, multiselect, outro}` — cada
+      prompt es un `Inline::run` de un componente que corre hasta completarse, sobre un
+      `ask` compartido.
+- [ ] El **builder** de prompts: `max_rows`, `hint`, `initial`, `optional`, `validate`.
+      Hoy sólo se llega a ellos componiendo a mano. Es lo que sigue.
 - [ ] Lo que ratatui **no** te da y lipgloss sí: `width()` con wrapping
       ANSI-aware, `align()`, margin sobre texto arbitrario, `join_h` / `join_v`.
 
