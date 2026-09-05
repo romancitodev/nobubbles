@@ -46,6 +46,7 @@ const TEMPLATES: [Template; 3] = [
 ];
 
 const MANAGERS: [&str; 3] = ["bun", "pnpm", "npm"];
+const EXTRAS: [&str; 3] = ["eslint", "prettier", "vitest"];
 
 /// What the installer has to say. The protocol belongs to the app, not to the framework.
 #[derive(Clone, Copy)]
@@ -137,27 +138,40 @@ fn install(template: Template) -> Result<()> {
 fn main() -> Result<()> {
   let session = inline::intro("create-nobubbles")?;
 
-  let name = inline::input("Project name: ")?;
-  let template = TEMPLATES[inline::select("Template: ", TEMPLATES.map(|t| t.name))?];
-  let manager = MANAGERS[inline::select("Package manager: ", MANAGERS)?];
-  let now = inline::select("Install dependencies now? ", ["Yes", "No"])? == 0;
+  let name = inline::input("Project name")?;
+  let template = TEMPLATES[inline::select("Template", TEMPLATES.map(|t| t.name))?];
+  let manager = MANAGERS[inline::select("Package manager", MANAGERS)?];
+  let extras = inline::multiselect("Anything else?", EXTRAS)?;
+  let now = inline::confirm("Install dependencies now?")?;
 
   if now {
     install(template)?;
   }
 
-  let next = if now {
-    format!("   cd {name}\n   {manager} {}", template.dev)
+  // `multiselect` hands back indices, so `EXTRAS` stays the source of truth.
+  let picked: Vec<&str> = extras.iter().map(|&i| EXTRAS[i]).collect();
+  let with = if picked.is_empty() {
+    template.name.to_owned()
   } else {
-    format!(
-      "   cd {name}\n   {manager} install\n   {manager} {}",
-      template.dev
-    )
+    format!("{} + {}", template.name, picked.join(", "))
   };
 
+  let mut steps = vec![format!("cd {name}")];
+  if !now {
+    steps.push(format!("{manager} install"));
+  }
+  steps.push(format!("{manager} {}", template.dev));
+
+  // The outro indents every line after the first, so these stay bare.
   inline::outro(session).with(format!(
-    "✨ Scaffolded {name} with {}\n\nNext steps:\n{next}",
-    template.name
+    "✨ Scaffolded {name} with {with}
+
+Next steps:
+{}",
+    steps.join(
+      "
+"
+    )
   ));
   Ok(())
 }
