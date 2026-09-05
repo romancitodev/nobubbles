@@ -129,14 +129,10 @@ mod tests {
 
     let converted: ratatui::style::Style = style.into();
     assert_eq!(converted.fg, Some(ratatui::style::Color::Rgb(1, 2, 3)));
-    assert!(
-      converted
-        .add_modifier
-        .contains(
-          ratatui::style::Modifier::BOLD
-            | ratatui::style::Modifier::DIM
-            | ratatui::style::Modifier::ITALIC
-        )
-    );
+    assert!(converted.add_modifier.contains(
+      ratatui::style::Modifier::BOLD
+        | ratatui::style::Modifier::DIM
+        | ratatui::style::Modifier::ITALIC
+    ));
   }
 }

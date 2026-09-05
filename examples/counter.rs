@@ -1,8 +1,8 @@
 use eyre::Result;
 use nobubbles::app::Inline;
+use nobubbles::components::text::Text;
 use nobubbles::components::{Component, Render};
 use nobubbles::signals::{Signal, quit, signal};
-use nobubbles::components::text::Text;
 
 struct Counter {
   count: Signal<i32>,

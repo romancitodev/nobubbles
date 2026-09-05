@@ -4,9 +4,9 @@ use nobubbles::app::Inline;
 use nobubbles::column;
 use nobubbles::components::input::Input;
 use nobubbles::components::select::Select;
+use nobubbles::components::text::Text;
 use nobubbles::components::{Component, Render};
 use nobubbles::signals::{Signal, quit, signal};
-use nobubbles::components::text::Text;
 
 struct Form {
   user: Input,

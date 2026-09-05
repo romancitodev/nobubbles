@@ -151,7 +151,10 @@ mod tests {
     assert!(inbox.drain(|n| seen.push(n)), "the sender is still alive");
     assert_eq!(seen, vec![1, 2]);
 
-    assert!(inbox.drain(|n| seen.push(n)), "a second drain finds nothing");
+    assert!(
+      inbox.drain(|n| seen.push(n)),
+      "a second drain finds nothing"
+    );
     assert_eq!(seen, vec![1, 2]);
   }
 

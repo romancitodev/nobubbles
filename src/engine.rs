@@ -187,16 +187,18 @@ mod tests {
     backend.set_cursor_position(Position::new(0, 1)).unwrap();
 
     let mut terminal = crate::render::inline(backend, 2).unwrap();
-    draw(&mut terminal, "top
-bottom");
+    draw(&mut terminal, "top\nbottom");
 
     reanchor(&mut terminal, 1).unwrap();
     let mut terminal = next_terminal(terminal, 1);
     draw(&mut terminal, "done");
 
-    terminal
-      .backend()
-      .assert_buffer_lines(["          ", "done      ", "          ", "          "]);
+    terminal.backend().assert_buffer_lines([
+      "          ",
+      "done      ",
+      "          ",
+      "          ",
+    ]);
   }
 
   /// The prompt transcript: one run leaves its frame painted and steps past it, so the next
@@ -204,15 +206,17 @@ bottom");
   #[test]
   fn park_below_leaves_the_next_viewport_under_this_one() {
     let mut terminal = crate::render::inline(TestBackend::new(10, 4), 2).unwrap();
-    draw(&mut terminal, "top
-bottom");
+    draw(&mut terminal, "top\nbottom");
 
     park_below(&mut terminal, 0, 2).unwrap();
     let mut terminal = next_terminal(terminal, 1);
     draw(&mut terminal, "next");
 
-    terminal
-      .backend()
-      .assert_buffer_lines(["top       ", "bottom    ", "next      ", "          "]);
+    terminal.backend().assert_buffer_lines([
+      "top       ",
+      "bottom    ",
+      "next      ",
+      "          ",
+    ]);
   }
 }

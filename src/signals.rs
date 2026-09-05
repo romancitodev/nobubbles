@@ -338,7 +338,10 @@ mod tests {
 
   #[test]
   fn raw_mode_guards_nest() {
-    assert!(raw_enter(), "the outermost guard is the one that turns raw mode on");
+    assert!(
+      raw_enter(),
+      "the outermost guard is the one that turns raw mode on"
+    );
     assert!(!raw_enter(), "a nested guard has nothing to do");
     assert!(!raw_exit(), "raw mode stays on while the outer guard lives");
     assert!(raw_exit(), "the last one out turns it back off");

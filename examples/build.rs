@@ -94,15 +94,18 @@ fn pace(name: &str) -> Duration {
 
 /// The rows, with a running count underneath.
 fn board(rows: &[Progress], done: usize) -> impl Render {
-  let footer = Text::new(format!("(Building {done}/{})", CRATES.len()))
-    .style(Style::new().dim().italic());
+  let footer =
+    Text::new(format!("(Building {done}/{})", CRATES.len())).style(Style::new().dim().italic());
 
   rows.iter().copied().collect::<Column>().child(footer)
 }
 
 fn summary() -> impl Render {
-  Text::new(format!("✨ Compiled {} crates on {CORES} cores", CRATES.len()))
-    .style(Style::new().fg(Color::LightGreen).bold())
+  Text::new(format!(
+    "✨ Compiled {} crates on {CORES} cores",
+    CRATES.len()
+  ))
+  .style(Style::new().fg(Color::LightGreen).bold())
 }
 
 fn main() -> Result<()> {
