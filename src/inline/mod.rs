@@ -6,11 +6,16 @@
 //! bar, three lines updating on their own) reach for `Inline::run` directly instead.
 
 mod components;
+pub mod log;
 
 pub use components::confirm::{Confirm, confirm};
+pub use components::group_multiselect::{GroupMultiSelect, group_multiselect};
 pub use components::input::{Text, input};
 pub use components::multiselect::{MultiSelect, multiselect};
+pub use components::password::{Password, password};
 pub use components::select::{Select, Strict, select};
+pub use components::select_key::{SelectKey, select_key};
+pub use components::task::{Report, task};
 
 use crossterm::style::Stylize;
 
