@@ -19,6 +19,8 @@ pub enum PromptState {
   Active,
   Submitted,
   Cancelled,
+  /// Refused: the answer didn't pass, and the closer carries why.
+  Error,
 }
 
 impl PromptState {
@@ -28,6 +30,7 @@ impl PromptState {
       Self::Active => ("◆", Style::new().fg(Color::Cyan)),
       Self::Submitted => ("◇", Style::new().fg(Color::Green)),
       Self::Cancelled => ("■", Style::new().fg(Color::Red)),
+      Self::Error => ("▲", Style::new().fg(Color::Yellow)),
     }
   }
 
@@ -37,6 +40,7 @@ impl PromptState {
       Self::Active => Style::new().fg(Color::Cyan),
       Self::Submitted => Style::new().dim(),
       Self::Cancelled => Style::new().fg(Color::Red),
+      Self::Error => Style::new().fg(Color::Yellow),
     }
   }
 
@@ -45,7 +49,7 @@ impl PromptState {
   fn closer(self) -> &'static str {
     match self {
       Self::Submitted => BAR,
-      Self::Active | Self::Cancelled => BAR_END,
+      Self::Active | Self::Cancelled | Self::Error => BAR_END,
     }
   }
 }
@@ -74,10 +78,10 @@ impl<R> Prompt<R> {
     }
   }
 
-  /// A line of help alongside the closer, for the keys this prompt listens to.
+  /// A line alongside the closer: the keys while the prompt is live, or why it was refused.
   ///
-  /// Only shown while the prompt is active: an answered one has nothing left to drive, and
-  /// a transcript full of key hints reads as noise.
+  /// Not shown once answered: there is nothing left to drive, and a transcript full of key
+  /// hints reads as noise.
   #[must_use]
   pub fn hint(mut self, hint: impl Into<Cow<'static, str>>) -> Self {
     self.hint = Some(hint.into());
@@ -124,9 +128,17 @@ impl<R: Render> Render for Prompt<R> {
       if closer < area.height {
         raw.set_string(area.x, area.y + closer, self.state.closer(), rail);
 
-        if let (PromptState::Active, Some(hint)) = (self.state, self.hint.as_ref()) {
-          let dim: ratatui::style::Style = Style::new().dim().into();
-          raw.set_string(area.x + GUTTER, area.y + closer, hint.as_ref(), dim);
+        if let Some(hint) = self.hint.as_ref() {
+          let style = match self.state {
+            PromptState::Active => Style::new().dim(),
+            PromptState::Error => Style::new().fg(Color::Yellow),
+            PromptState::Submitted | PromptState::Cancelled => Style::new().dim(),
+          };
+
+          if self.state != PromptState::Submitted {
+            let style: ratatui::style::Style = style.into();
+            raw.set_string(area.x + GUTTER, area.y + closer, hint.as_ref(), style);
+          }
         }
       }
     }
@@ -238,6 +250,14 @@ mod tests {
       .collect();
 
     assert_eq!(lines, ["◆  Body", "│  a", "│  b", "└", ""]);
+  }
+
+  /// A refusal is not a cancel: the prompt stays live, turns yellow and says why.
+  #[test]
+  fn a_refused_prompt_carries_the_reason() {
+    let refused = Prompt::new(PromptState::Error, "Title", Text::new("")).hint("required");
+
+    assert_eq!(draw(refused, 20, 4), ["▲  Title", "│", "└  required", ""]);
   }
 
   #[test]

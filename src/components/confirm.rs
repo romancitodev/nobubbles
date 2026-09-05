@@ -58,6 +58,13 @@ impl Confirm {
     }
   }
 
+  /// Starts on `value` instead of yes.
+  #[must_use]
+  pub fn initial(self, value: bool) -> Self {
+    self.value.set(value);
+    self
+  }
+
   /// Replaces the style.
   #[must_use]
   pub fn style(self, style: ConfirmStyle) -> Self {

@@ -57,6 +57,17 @@ impl Select {
     }
   }
 
+  /// Starts the cursor on `index` instead of the first row. Out of range lands on the first.
+  #[must_use]
+  pub fn initial(self, index: usize) -> Self {
+    let len = self.options.with_ref(Vec::len);
+    if index < len {
+      self.selected.set(index);
+      self.scroll_into_view();
+    }
+    self
+  }
+
   /// Shows at most `rows` options at a time, scrolling to keep the cursor in view.
   ///
   /// Without it a long list makes the view as tall as the list, which for something like a
