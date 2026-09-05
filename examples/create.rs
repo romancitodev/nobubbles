@@ -31,7 +31,16 @@ struct Template {
 const TEMPLATES: [Template; 3] = [
   Template {
     name: "React",
-    packages: &["react", "react-dom", "vite", "typescript", "@types/react"],
+    packages: &[
+      "react",
+      "react-dom",
+      "vite",
+      "typescript",
+      "@types/react",
+      "@shadcn-ui/react",
+      "lucide-icons",
+      "@types/nodejs",
+    ],
     dev: "dev",
   },
   Template {
@@ -142,12 +151,35 @@ fn install(template: Template) -> Result<()> {
 fn main() -> Result<()> {
   let session = inline::intro("create-nobubbles")?;
 
-  let name = inline::input("Project name")?;
-  let about = inline::multiline("Description")?;
-  let template = TEMPLATES[inline::select("Template", TEMPLATES.map(|t| t.name))?];
-  let manager = MANAGERS[inline::select("Package manager", MANAGERS)?];
-  let extras = inline::multiselect("Anything else?", EXTRAS)?;
-  let now = inline::confirm("Install dependencies now?")?;
+  let name = inline::input("Project name")
+    .validate(|value| {
+      if value.trim().is_empty() {
+        Err("a project needs a name".into())
+      } else {
+        Ok(())
+      }
+    })
+    .ask()?;
+
+  let about = inline::input("Description").multiline().ask()?;
+
+  let template = TEMPLATES[inline::select("Template")
+    .items(TEMPLATES.map(|t| t.name))
+    .strict()
+    .ask()?];
+
+  let manager = MANAGERS[inline::select("Package manager")
+    .items(MANAGERS)
+    .initial(0)
+    .strict()
+    .ask()?];
+
+  let extras = inline::multiselect("Anything else?")
+    .items(EXTRAS)
+    .max_rows(2)
+    .ask()?;
+
+  let now = inline::confirm("Install dependencies now?").ask()?;
 
   if now {
     install(template)?;
