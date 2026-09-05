@@ -23,6 +23,8 @@ pub struct MultiSelectStyle {
   pub cursor: Style,
   /// Everything else, box and label together.
   pub inactive: Style,
+  /// A group heading, which is a row you can't tick.
+  pub header: Style,
   /// Most rows drawn at once. `None` draws the whole list, however long it is.
   pub max_rows: Option<u16>,
 }
@@ -35,6 +37,7 @@ impl Default for MultiSelectStyle {
       checked: Style::new().fg(Color::Green),
       cursor: Style::new().fg(Color::Cyan),
       inactive: Style::new().dim(),
+      header: Style::new().bold(),
       max_rows: None,
     }
   }
@@ -55,6 +58,8 @@ impl Default for MultiSelectStyle {
 pub struct MultiSelect {
   options: Signal<Vec<Cow<'static, str>>>,
   checked: Signal<Vec<bool>>,
+  /// Rows that are headings: the cursor jumps over them and space ignores them.
+  headers: Signal<Vec<bool>>,
   cursor: Signal<usize>,
   /// First row of the window into `options`. Only moves when the cursor would leave it.
   offset: Signal<usize>,
@@ -66,10 +71,58 @@ impl MultiSelect {
     let options: Vec<Cow<'static, str>> = options.into_iter().map(Into::into).collect();
     Self {
       checked: signal(vec![false; options.len()]),
+      headers: signal(vec![false; options.len()]),
       options: signal(options),
       cursor: signal(0),
       offset: signal(0),
       style: signal(MultiSelectStyle::default()),
+    }
+  }
+
+  /// Marks rows as headings: drawn without a box, skipped by the cursor, deaf to space.
+  ///
+  /// The cursor moves to the first row that isn't one, so a list that opens with a heading
+  /// doesn't start on something you can't answer.
+  #[must_use]
+  pub fn headers(self, at: impl IntoIterator<Item = usize>) -> Self {
+    self.headers.update(|headers| {
+      for row in at {
+        if let Some(header) = headers.get_mut(row) {
+          *header = true;
+        }
+      }
+    });
+
+    if self.is_header(self.cursor.get()) {
+      self.step(1);
+    }
+    self
+  }
+
+  /// Whether row `at` is a heading. Out of range counts as one, so nothing lands there.
+  fn is_header(&self, at: usize) -> bool {
+    self
+      .headers
+      .with_ref(|headers| headers.get(at).copied().unwrap_or(true))
+  }
+
+  /// Walks the cursor by `by`, wrapping, until it lands on something tickable.
+  ///
+  /// Bounded by the length: a list that is all headings would otherwise spin forever.
+  fn step(&self, by: usize) {
+    let len = self.options.with_ref(Vec::len);
+    if len == 0 {
+      return;
+    }
+
+    let mut at = self.cursor.get();
+    for _ in 0..len {
+      at = (at + by) % len;
+      if !self.is_header(at) {
+        self.cursor.set(at);
+        self.scroll_into_view();
+        return;
+      }
     }
   }
 
@@ -132,27 +185,22 @@ impl MultiSelect {
     match key.code {
       KeyCode::Up => {
         let len = self.options.with_ref(Vec::len);
-        if len > 0 {
-          self.cursor.update(|at| *at = (*at + len - 1) % len);
-          self.scroll_into_view();
-        }
+        self.step(len.saturating_sub(1));
         true
       }
       KeyCode::Down => {
-        let len = self.options.with_ref(Vec::len);
-        if len > 0 {
-          self.cursor.update(|at| *at = (*at + 1) % len);
-          self.scroll_into_view();
-        }
+        self.step(1);
         true
       }
       KeyCode::Char(' ') => {
         let at = self.cursor.get();
-        self.checked.update(|checked| {
-          if let Some(row) = checked.get_mut(at) {
-            *row = !*row;
-          }
-        });
+        if !self.is_header(at) {
+          self.checked.update(|checked| {
+            if let Some(row) = checked.get_mut(at) {
+              *row = !*row;
+            }
+          });
+        }
         true
       }
       _ => false,
@@ -172,6 +220,17 @@ impl MultiSelect {
         .iter()
         .enumerate()
         .filter_map(|(i, ticked)| ticked.then_some(i))
+        .collect()
+    })
+  }
+
+  /// The row indices that aren't headings, in order. What a caller maps its own list with.
+  pub fn rows(&self) -> Vec<usize> {
+    self.headers.with_ref(|headers| {
+      headers
+        .iter()
+        .enumerate()
+        .filter_map(|(i, header)| (!header).then_some(i))
         .collect()
     })
   }
@@ -221,6 +280,10 @@ impl Render for MultiSelect {
         .skip(window.start)
         .take(window.len())
         .map(|(i, option)| {
+          if self.is_header(i) {
+            return Line::styled(option.to_string(), style.header);
+          }
+
           let ticked = checked.get(i).copied().unwrap_or(false);
           let symbol = if ticked {
             style.checked_symbol
@@ -289,6 +352,37 @@ mod tests {
 
     assert!(list.on_key(press(KeyCode::Down)));
     assert_eq!(list.cursor(), 0);
+  }
+
+  /// Headings are rows you can't land on, which is the whole reason they exist.
+  #[test]
+  fn the_cursor_jumps_over_headings() {
+    let list = MultiSelect::new(["Frontend", "react", "svelte", "Backend", "axum"]).headers([0, 3]);
+
+    assert_eq!(list.cursor(), 1, "it opens on the first tickable row");
+
+    list.on_key(press(KeyCode::Down));
+    assert_eq!(list.cursor(), 2);
+
+    list.on_key(press(KeyCode::Down));
+    assert_eq!(list.cursor(), 4, "row 3 is a heading, so it is skipped");
+
+    list.on_key(press(KeyCode::Down));
+    assert_eq!(list.cursor(), 1, "and it wraps past the first heading too");
+  }
+
+  #[test]
+  fn space_does_nothing_on_a_heading() {
+    let list = MultiSelect::new(["Group", "one"]).headers([0]);
+    // Land on the heading the only way possible: by asking for it directly.
+    list.on_key(press(KeyCode::Char(' ')));
+    assert_eq!(
+      list.selected(),
+      vec![1],
+      "the cursor was moved off it, so it ticked the option"
+    );
+
+    assert_eq!(list.rows(), vec![1], "and only the option counts as a row");
   }
 
   #[test]
