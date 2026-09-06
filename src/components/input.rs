@@ -56,19 +56,18 @@ impl Input {
     }
   }
 
-  /// Draws a fixed-width mask instead of the text once there's anything typed, so a password
-  /// never reaches the screen or the transcript. Fixed-width and not one dot per grapheme:
-  /// matching the real length on screen is exactly the kind of leak masking is supposed to
-  /// prevent (shoulder-surfing, screen recordings). Empty stays empty, so a placeholder can
-  /// still show before anything's typed.
+  /// Draws a dot per grapheme instead of the text, and answers with dots too, so a password
+  /// never reaches the screen or the transcript. The usual password-field look: the dots
+  /// fill in and the caret rides along as you type.
   #[must_use]
   pub fn masked(self) -> Self {
     self.masked.set(true);
     self
   }
 
-  /// Past even `masked`: draws nothing at all, ever, mask included. For values where the
-  /// fact that someone's typing something is itself worth hiding.
+  /// Past `masked`: draws nothing at all, ever, caret included. `masked`'s dots (and its
+  /// caret) still say how long the value is; this is for the value where that's worth
+  /// hiding too.
   #[must_use]
   pub fn invisible(self) -> Self {
     self.masked.set(true);
@@ -76,22 +75,15 @@ impl Input {
     self
   }
 
-  const MASK_WIDTH: usize = 24;
-
-  /// What to draw: the value, a mask that says nothing about how long it really is, or
-  /// nothing at all.
+  /// What to draw: the value, one dot per grapheme, or nothing at all.
   fn shown(&self) -> String {
     let value = self.value.get();
     if self.invisible.get() {
-      return String::new();
-    }
-    if !self.masked.get() {
-      return value;
-    }
-    if value.is_empty() {
       String::new()
+    } else if self.masked.get() {
+      "•".repeat(value.graphemes(true).count())
     } else {
-      "•".repeat(Self::MASK_WIDTH)
+      value
     }
   }
 
@@ -361,10 +353,10 @@ impl Render for Input {
     let value = self.shown();
     let cursor = self.cursor.get();
 
-    // A masked field's caret would be the last leak left: its position tracks the real
-    // length just as precisely as one dot per grapheme did. Nobody sets the cursor here, so
-    // it draws hidden (see `Buffer::set_cursor`).
-    if !self.masked.get() {
+    // `invisible` draws nothing at all, caret included: a caret over an empty line would
+    // still say how long the value is. Nobody sets the cursor here, so it draws hidden (see
+    // `Buffer::set_cursor`). `masked` alone keeps the usual moving caret over its dots.
+    if !self.invisible.get() {
       let typed: String = value.graphemes(true).take(cursor).collect();
 
       // The row is how many newlines the cursor is past; the column is the width of what's
@@ -537,39 +529,22 @@ mod tests {
   }
 
   #[test]
-  fn masked_input_hides_the_real_length() {
+  fn masked_input_draws_one_dot_per_grapheme() {
     let field = Input::new().masked();
-    assert_eq!(rendered_text(field, 20), "", "empty stays empty, so a placeholder can show");
+    assert_eq!(rendered_text(field, 20), "");
 
-    for c in "hi".chars() {
-      let _ = field.on_key(press(KeyCode::Char(c)));
-    }
-    let short = rendered_text(field, 20);
-
-    for c in "a much longer passphrase".chars() {
-      let _ = field.on_key(press(KeyCode::Char(c)));
-    }
-    let long = rendered_text(field, 20);
-
-    assert_eq!(short, long, "the mask must not grow with the real value");
-    assert!(!short.is_empty());
+    let _ = field.on_key(press(KeyCode::Char('h')));
+    let _ = field.on_key(press(KeyCode::Char('i')));
+    assert_eq!(rendered_text(field, 20), "••", "the usual password look: dots fill in as you type");
+    assert_eq!(field.value(), "hi", "but the real value still submits");
   }
 
-  /// A caret that moves with real keystrokes leaks the length just as precisely as one dot
-  /// per grapheme would, even over a mask that never changes size.
   #[test]
-  fn masked_input_never_shows_a_caret() {
+  fn masked_input_still_shows_the_caret() {
     let field = Input::new().masked();
-    assert_eq!(caret(field), None, "empty, nothing to hide, still no caret");
-
-    for c in "some secret".chars() {
-      let _ = field.on_key(press(KeyCode::Char(c)));
-    }
-    assert_eq!(caret(field), None);
-
-    let _ = field.on_key(press(KeyCode::Left));
-    let _ = field.on_key(press(KeyCode::Backspace));
-    assert_eq!(caret(field), None, "no caret through edits either");
+    let _ = field.on_key(press(KeyCode::Char('h')));
+    let _ = field.on_key(press(KeyCode::Char('i')));
+    assert_eq!(caret(field), Some((5, 1)), "the caret rides the dots same as plain text");
   }
 
   #[test]

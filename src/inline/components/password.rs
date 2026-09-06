@@ -6,8 +6,7 @@ use crate::{
   inline::components::{Check, Validator, always_ok, ask},
 };
 
-/// Asks for something secret. A fixed-width mask on screen, dots in the transcript, so
-/// neither ever says how long the real value is.
+/// Asks for something secret. Dots on screen, dots in the transcript.
 pub struct Password<'a> {
   prompt: Block,
   placeholder: Option<&'static str>,
@@ -35,7 +34,7 @@ impl<'a> Password<'a> {
     }
   }
 
-  /// Past the fixed mask: draws nothing at all while typing, for the rare case where even
+  /// Past the usual dots: draws nothing at all while typing, for the rare case where even
   /// "someone's typing something" shouldn't show.
   #[must_use]
   pub fn invisible(self) -> Self {
