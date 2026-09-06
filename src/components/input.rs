@@ -323,8 +323,16 @@ impl Input {
 }
 
 impl crate::components::Ask for Input {
+  // Unlike `shown()` (what's drawn live, where an empty value gets the dim placeholder
+  // painted over it separately), this is what the *settled* transcript line prints once
+  // answered, so an empty field needs the placeholder folded in here, or it prints nothing.
   fn answer(&self) -> String {
-    self.shown()
+    let shown = self.shown();
+    if shown.is_empty() {
+      self.placeholder.map_or(shown, str::to_owned)
+    } else {
+      shown
+    }
   }
 
   fn controls(&self) -> &'static str {
@@ -526,6 +534,24 @@ mod tests {
     let _ = field.on_key(press(KeyCode::Char('x')));
     assert_eq!(rendered_text(field, 20), "x", "typing replaces it");
     assert_eq!(field.value(), "x", "and it was never the value to begin with");
+  }
+
+  #[test]
+  fn an_empty_answer_falls_back_to_the_placeholder() {
+    use crate::components::Ask;
+
+    let field = Input::new().placeholder("[skipped]");
+    assert_eq!(
+      field.answer(),
+      "[skipped]",
+      "the settled transcript line would otherwise print nothing for an empty field"
+    );
+
+    let _ = field.on_key(press(KeyCode::Char('x')));
+    assert_eq!(field.answer(), "x", "a real value always wins");
+
+    let no_placeholder = Input::new();
+    assert_eq!(no_placeholder.answer(), "", "nothing to fall back to, so still empty");
   }
 
   #[test]
