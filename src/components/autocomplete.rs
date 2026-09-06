@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 use crate::{
-  components::{Render, input::Input},
+  components::{Ask, Render, input::Input},
   signals::{Signal, signal},
   style::{Style, palette},
 };
@@ -192,8 +192,11 @@ impl Autocomplete {
 }
 
 impl crate::components::Ask for Autocomplete {
+  // `self.input.answer()` and not `self.value()`: the settled transcript line needs the same
+  // empty-falls-back-to-placeholder behavior `Input` already has, or an untouched field with
+  // a "none"-style placeholder prints nothing once submitted.
   fn answer(&self) -> String {
-    self.value()
+    self.input.answer()
   }
 
   fn controls(&self) -> &'static str {
