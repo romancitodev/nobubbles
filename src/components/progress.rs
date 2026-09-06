@@ -20,6 +20,9 @@ pub struct ProgressStyle {
   pub label: Style,
   pub filled_symbol: &'static str,
   pub unfilled_symbol: &'static str,
+  /// Columns the label is padded to. `None` leaves it as wide as its text, which is what
+  /// puts the bars of a column at different starting points.
+  pub label_width: Option<u16>,
   /// Widest the row is allowed to draw, in columns. `None` takes whatever it's given.
   pub width: Option<u16>,
 }
@@ -32,6 +35,7 @@ impl Default for ProgressStyle {
       label: Style::new(),
       filled_symbol: "━",
       unfilled_symbol: "━",
+      label_width: None,
       width: None,
     }
   }
@@ -69,6 +73,19 @@ impl Progress {
   #[must_use]
   pub fn style(self, style: ProgressStyle) -> Self {
     self.style.set(style);
+    self
+  }
+
+  /// Pads the label to `columns`, so several bars stacked in a column all start their bar in
+  /// the same place. Set it to the widest label you have.
+  ///
+  /// Pads, never cuts: a label wider than this pushes its own bar along, which is visible and
+  /// therefore fixable, unlike a silently chopped name.
+  #[must_use]
+  pub fn label_width(self, columns: u16) -> Self {
+    self
+      .style
+      .update(|style| style.label_width = Some(columns));
     self
   }
 
@@ -128,7 +145,12 @@ impl Default for Progress {
 impl Render for Progress {
   fn render(self, area: super::Rect, buf: &mut super::Buffer<'_>) {
     let style = self.style.get();
-    let label = self.label.get();
+    let mut label = self.label.get();
+
+    if let Some(columns) = style.label_width {
+      let have = crate::rimel::width_of(&label);
+      label.push_str(&" ".repeat(usize::from(columns.saturating_sub(have))));
+    }
 
     let mut area: ratatui::layout::Rect = area.into();
     if let Some(columns) = style.width {
@@ -225,6 +247,29 @@ mod tests {
       Span::styled("####", green()),
       Span::styled(".....", gray()),
     ]));
+  }
+
+  /// Two labels of different length start their bars in the same column.
+  #[test]
+  fn label_width_lines_the_bars_up() {
+    let style = ProgressStyle {
+      filled_symbol: "#",
+      unfilled_symbol: ".",
+      label_width: Some(4),
+      ..ProgressStyle::default()
+    };
+
+    for name in ["ab", "abcd"] {
+      let job = Progress::with(name).style(style);
+      job.set(0.5);
+      let terminal = draw(job);
+
+      let row: String = (0..10)
+        .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_owned())
+        .collect();
+      assert_eq!(&row[4..5], " ", "{name}: the bar starts past the label");
+      assert_eq!(&row[5..], "##...", "{name}");
+    }
   }
 
   #[test]
