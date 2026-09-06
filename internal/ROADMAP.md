@@ -12,8 +12,12 @@ inline dinámico, transcript entre corridas, Ctrl+C y frames auto-sostenidos.
 Componentes: `Text`, `Input` (multilínea, caret), `Select` y `MultiSelect` (con
 ventana de scroll), `Confirm`, `Progress`, `Column`, y `Prompt`, el riel de
 cliclack. `inline::{intro, input, multiline, select, confirm, multiselect, outro}`
-funcionan de punta a punta. `style.rs` tiene vocabulario propio (D-019) y
-`effects.rs` el canal de trabajo de fondo (D-018). 57 tests.
+funcionan de punta a punta. `effects.rs` es el canal de trabajo de fondo (D-018).
+
+El repo es un workspace: `crates/norimel` (rímel) tiene el vocabulario de estilo
+—que se mudó ahí, D-021— y los bloques de texto con utilidades tipo tailwind.
+Lo caro está detrás de features y el build por defecto son 80 crates (D-024).
+84 tests entre los dos crates.
 
 **Siguiente: el builder de prompts.** `inline::*` no llega a `max_rows` ni a
 `multiline` sin funciones hermanas, y detrás vienen `hint`, `initial`, `optional`
@@ -200,8 +204,10 @@ emoji con modificador de tono no se borra bien con un `pop()`.
       `ask` compartido.
 - [ ] El **builder** de prompts: `max_rows`, `hint`, `initial`, `optional`, `validate`.
       Hoy sólo se llega a ellos componiendo a mano. Es lo que sigue.
-- [ ] Lo que ratatui **no** te da y lipgloss sí: `width()` con wrapping
-      ANSI-aware, `align()`, margin sobre texto arbitrario, `join_h` / `join_v`.
+- [x] Lo que ratatui **no** te da y lipgloss sí, ahora en `crates/norimel` (D-021):
+      `w()`, `left/center/right`, `p/px/py`, `m/mx/my`, `border`, `row`/`col`,
+      `separator`, `space`, y ramps de color con colorgrad. **Falta el wrapping**:
+      `w()` corta, no reflowea.
 
 ---
 

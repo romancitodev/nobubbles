@@ -247,7 +247,8 @@ reservado como backend candidato para la Fase 8 (Efectos).
 en runtime — no se linkea lo que no se llama. Aceptable.
 
 **Se revisa si:** llegamos a la Fase 8 y se elige otro backend, o si el tiempo de
-build empieza a molestar antes.
+build empieza a molestar antes. **Se cumplió** — ver D-024: sigue en el
+`Cargo.toml`, ahora detrás de una feature apagada.
 
 ---
 
@@ -578,3 +579,109 @@ Es también el alias que el autor había terminado usando en `simple-commits`.
 
 **Se revisa si:** se adopta el protocolo de teclado de Kitty, donde `ctrl+enter`
 sí es distinguible.
+
+---
+
+## D-021 — rímel es un crate aparte, y se lleva `Color`/`Style`
+
+**Estado:** aceptada · 2026-09-05
+
+**Qué es:** `crates/norimel`, el ítem de lipgloss de la Fase 5 con nombre propio.
+Un `Block` son filas de runs con estilo más utilidades de caja. El repo pasa a
+ser un workspace con `nobubbles` en la raíz y los miembros en `crates/*`.
+
+**Por qué aparte:** es la relación lipgloss/bubbletea. rímel no sabe nada del
+loop ni de los signals, y sin la feature `ratatui` no sabe nada de ratatui
+tampoco: sirve para un CLI que sólo imprime.
+
+**Consecuencia grande:** `style::{Color, Style}` **se mudan a norimel**. Son el
+vocabulario compartido, y tenerlo dos veces con un `From` en el medio es la
+duplicación que D-019 evitó. `nobubbles::style` queda como re-export. El `From`
+hacia ratatui tiene que vivir en norimel: desde nobubbles los dos tipos son
+ajenos y la coherencia lo prohíbe.
+
+**Por qué no se hizo opcional norimel:** no cuesta nada. crossterm y
+unicode-segmentation ya estaban, unicode-width entraba por ratatui. Lo caro es
+colorgrad, y eso sí es feature (D-024).
+
+**Se revisa si:** norimel deja de compilar sin ratatui, o si aparece un tercer
+crate que quiera el vocabulario de estilo y no el resto.
+
+---
+
+## D-022 — Se cae el blanket `impl<W: Widget> Render for W`
+
+**Estado:** aceptada · 2026-09-05 (modifica D-016)
+
+**El choque:** un blanket sobre un trait ajeno reclama **todos** los tipos
+ajenos. Con él en el crate, `impl Render for norimel::Block` no compila:
+
+    error[E0119]: conflicting implementations of trait `Render` for type `norimel::Block`
+    note: upstream crates may add a new impl of `Widget` for `norimel::Block`
+
+**Decisión:** se borra el blanket. Los widgets de acá ya llamaban
+`Widget::render` a mano — el único uso real eran tres tests de
+`components/mod.rs`, que ahora usan `Text`.
+
+**Lo que se pierde:** meter un widget de ratatui pelado en `cx.render`. D-019 ya
+había declarado que ese no es el camino: ningún ejemplo importa ratatui.
+
+**Descartado:** que norimel implemente `Widget` (feature `ratatui`) y llegue a
+`Render` por el blanket. Anda, pero `Render::height` cae al default de 1 fila y
+un bloque con borde mide 4: el viewport inline lo recorta.
+
+**Se revisa si:** alguien pide componer widgets de ratatui de terceros; el
+reemplazo es un newtype local, no volver al blanket.
+
+---
+
+## D-023 — Las utilidades de rímel anotan, la forma se compone al final
+
+**Estado:** aceptada · 2026-09-05
+
+**Por qué:** la API se pidió tailwind-like — `bg`, `px`, `w`, `center`,
+`rounded`. Aplicarlas en el momento tiene dos trampas conocidas: `w(20)` seguido
+de `center()` no centra nada (el relleno ya está puesto), y `px(1).px(1)` deja
+dos columnas. Las dos desaparecen si el builder sólo escribe un campo y `compose`
+arma las filas una vez, en la única salida que hay.
+
+**Consecuencia:** `PartialEq for Block` compara `compose()`, no los campos. Dos
+bloques son iguales cuando se dibujan igual, que es lo que el test de
+conmutatividad quiere decir.
+
+**Costo:** `size()` y `runs()` componen cada vez. Son bloques de decenas de
+celdas; si algún día no alcanza, se cachea adentro.
+
+**Se revisa si:** aparece una utilidad que no se pueda expresar como un campo.
+
+---
+
+## D-024 — Todo lo caro va detrás de una feature
+
+**Estado:** aceptada · 2026-09-05
+
+**Por qué:** el tiempo de build. `cargo tree` del workspace estaba en 132 crates,
+de los cuales 67 eran `compio` sin usar (D-011) y el resto crecía con cada
+biblioteca linda que sumábamos.
+
+**Lo que quedó:**
+
+| feature | qué prende | costo |
+|---|---|---|
+| `gradient` | `Ramp` de rímel, sobre colorgrad | +9 crates, phf con proc-macros |
+| `fx` | `Ctx::effect`, sobre tachyonfx | +6 crates, bon y prettyplease |
+| `compio` | nada todavía (D-011) | +64 crates |
+| `full` | `fx` + `gradient` | para correr los ejemplos |
+
+Default: **80 crates**. Con `full`: 92. Con todo: 144.
+
+**Los ejemplos declaran `required-features`**, así `cargo build --examples` no
+falla ni arrastra nada de más.
+
+**Por qué colorgrad y tachyonfx y no a mano:** colorgrad da las paletas y la
+interpolación; tachyonfx da los efectos sobre el buffer y — lo que importaba —
+pide `ratatui ^0.30.2`, la misma que usamos. Escribir eso a mano era ~25 líneas
+de HSL para lo primero y bastante más para lo segundo.
+
+**Se revisa si:** alguna feature deja de ser opcional de hecho, o si el default
+vuelve a crecer sin que nadie lo mire.

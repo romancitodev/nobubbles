@@ -29,6 +29,73 @@ que no se puede reconstruir leyendo el código.
 
 ---
 
+## 2026-09-05 — Fase 5: rímel sale del crate, y todo lo caro se apaga
+
+**Hecho:**
+- `crates/norimel` — rímel, el ítem lipgloss de la Fase 5. El repo es workspace
+  (`members = ["crates/*"]`), con las deps compartidas en `[workspace.dependencies]`.
+- API tailwind-like: `bg`, `fg`, `bold`, `p/px/py`, `m/mx/my`, `w`, `left/center/right`,
+  `border/rounded/thick/border_color`, más `row`/`col`, `separator`, `space`. Las
+  utilidades sólo anotan y `compose()` arma las filas al final (D-023).
+- `Ramp` sobre colorgrad: `rainbow`, `sinebow`, `pastel`, `turbo`, `cool`, `warm`, más
+  `wash()`. `Block::gradient` pinta un color por carácter, `Block::animate` lo corre con el
+  reloj.
+- `style::{Color, Style}` se mudaron a norimel (D-021). `nobubbles::style` es re-export.
+- Se cayó el blanket `impl<W: Widget> Render for W` (D-022).
+- `Ctx::effect` sobre tachyonfx, `Ctx::since`, y `signals::redraw()` para pedir cuadro sin
+  escribir un signal.
+- Features: `gradient`, `fx`, `full`, `compio`. Default pasó de 132 a **80 crates** (D-024).
+- `Select`/`MultiSelect`: `note(at, texto)`, el mini-label que sólo se ve en la fila activa.
+- Paleta **Catppuccin Mocha** en `norimel::palette`, y todos los defaults repintados:
+  riel, markers, `Select`, `MultiSelect`, `Confirm`, `Progress`, `SelectKey` y las líneas
+  impresas de `inline::log` / `intro` / `outro` (que ahora pasan por rímel en vez de por
+  `Stylize`).
+- `ctrl+a` en `MultiSelect` es toggle-all, saltea headings.
+- La respuesta colapsada del `MultiSelect` se corta al ancho de la terminal: muestra lo que
+  entra y agrega `+N more`.
+- `inline::log::block(&Block)` — imprime un bloque de rímel sobre el riel con `
+
+`.
+- Ejemplos nuevos: `styles`, `commit`, `download`, `fx`. README con las dos tablas.
+
+**Aprendido:**
+- Un blanket sobre un trait ajeno reclama **todos** los tipos ajenos. Es lo que impide
+  `impl Render for norimel::Block`, y el error lo dice: *upstream crates may add a new impl*.
+- Las utilidades que se aplican en el momento no conmutan: `w(20).center()` no centra nada
+  porque el relleno ya está puesto. Anotar y componer al final lo arregla de raíz.
+- Una vista sin signals **no se redibuja**. La barra del ejemplo `styles` sólo avanzaba al
+  apretar una tecla: `at` era un `f32` pelado. Escribir un signal (o `redraw()`) es lo que
+  pide el cuadro siguiente.
+- tachyonfx 0.25.1 pide `ratatui ^0.30.2`, la misma que usamos. Se chequeó en el índice
+  antes de escribir una línea.
+
+**Callejones sin salida:**
+- `examples/git.rs` compilaba a `target\debug\examples\git.exe`, y Windows resuelve un
+  nombre pelado contra el directorio del ejecutable que llama **antes que PATH**: o sea que
+  `Command::new("git")` se ejecutaba a sí mismo. Fork bomb, 525 procesos, terminal que no
+  se dejaba matar. Parece un deadlock en el pipe plumbing y no lo es. Renombrado a
+  `examples/commit.rs`.
+- Hacer que norimel implemente `Widget` (feature `ratatui`) para llegar a `Render` por el
+  blanket: compila, pero `Render::height` cae al default de 1 fila y un bloque con borde
+  mide 4. El viewport inline lo recorta.
+- Hacer opcional a norimel entero: obliga a tener `Color`/`Style` dos veces con un `From`
+  en el medio, y no ahorra nada — sus tres deps ya estaban en el árbol.
+- El primer `Ramp` era HSL a mano (~25 líneas). Anduvo, pero colorgrad da las paletas
+  buenas y era pedido explícito.
+
+**Abierto:**
+- `w()` corta, no wrapea. El wrapping ANSI-aware sigue siendo el pendiente real de la
+  Fase 5.
+- `Block::runs()` compone en cada llamada, y `Render::height` la llama por cuadro. Barato
+  hoy; si molesta, se cachea adentro de `Block`.
+- `group_multiselect` no tiene `note()`: los índices ahí incluyen los headings.
+
+**Siguiente:**
+- El builder de prompts (`hint`, `initial`, `optional`), que sigue siendo el ítem que
+  bloquea el resto de la Fase 5.
+
+---
+
 ## 2026-09-05 — Fases 4 y 5: prompts, estilo y efectos
 
 **Hecho:**
