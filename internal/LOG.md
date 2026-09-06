@@ -29,6 +29,75 @@ que no se puede reconstruir leyendo el código.
 
 ---
 
+## 2026-09-06 — Fase 5: search, autocomplete, y un `Input` de verdad
+
+**Hecho:**
+- `Block::settled(color)`: congela un bloque animado a un color fijo. Usado por `ask()` y
+  `task()` al enviar, arregla el bug de "Booting" que quedaba rainbow después de pasar al
+  siguiente prompt.
+- `Block::on_bg()`: el ramp de `gradient`/`animate`/`pulse` puede pintar el fondo en vez del
+  texto (`Channel::Fg`/`Bg` interno).
+- Fuzzy search (`fuzzy-matcher`, `SkimMatcherV2`) en `Select` y `MultiSelect`, detrás de
+  `.filter()` (opt-in — ver D-025): `/` abre, tipear filtra, Esc limpia, matchea el label o la
+  `.note()`. `MultiSelect` mantiene los headers: uno sobrevive si algo de su grupo matchea.
+- `MultiSelect`: Enter durante el search tickea la fila resaltada en vez de submitear — antes
+  te sacaba al siguiente prompt sin registrar el pick.
+- Fix de un panic real: `MultiSelect::scroll_into_view` indexaba `matches[pos]` sobre un slice
+  vacío cuando el query no matcheaba nada y había `max_rows` puesto.
+- Placeholder "no options" / "no matches" a nivel de lib para listas vacías, en vez de
+  renderizar nada.
+- `Input`: navegación por palabra (ctrl+←/→), borrado de palabra entera (ctrl+backspace/
+  delete), selección (shift+flechas, ctrl+shift para palabra entera) con highlight visual
+  (reverse video), y `.placeholder()` (texto mudo mientras está vacío).
+- Widget nuevo: `Autocomplete` (`components::autocomplete` + `inline::autocomplete`), compone
+  `Input` — arrows resaltan una sugerencia, Enter la copia adentro y deja que `ask()` la
+  submitea. `.strict()`/`.validate()` en la capa `inline::` (ver D-026), el widget no sabe de
+  ninguno de los dos.
+- Refactor: `fuzzy_matches`/`render_search_row` compartidos en `components/mod.rs`, usados por
+  `Select`, `MultiSelect` y `Autocomplete` — sacó tres copias del mismo match y dos copias del
+  mismo render de fila de búsqueda.
+- `examples/deep-thought.rs`: dos prompts de autocomplete (planeta en `.strict()`, estrategia
+  relajada). Placeholder agregado a todos los ejemplos que ya tenían un campo de texto.
+- README: sección "Search & autocomplete", `on_bg`/`settled` mencionados en Effects, tabla de
+  crates actualizada (82 default, 94 con `full`).
+
+**Aprendido:**
+- `map_cells` preserva `restless` a propósito, para que un efecto propio siga pidiendo cuadros
+  después de recolorear. `Block::settled` quiere lo contrario — apagar la animación para
+  siempre — así que tiene que limpiar `restless` a mano después de llamar `map_cells`, si no
+  un bloque marcado con `.animated()` queda "congelado" pero sigue pidiendo frames (ver D-027).
+- `MultiSelect::matches()` con headers sale más corto y sin doble allocación como un solo pase
+  hacia atrás (`group_matches` cargando si algo del grupo ya matcheó) en vez de un `Vec<bool>`
+  más un segundo pase con ventanas sobre ese vector.
+- El resaltado de `Autocomplete` no puede auto-seguir el primer match al tipear: si lo
+  siguiera, Enter podría aceptar una sugerencia que el usuario nunca pidió explícitamente.
+  Sólo Down/Up resaltan; tipear limpia el resaltado viejo.
+- `next_word` puede caminar el iterador de grafemas directo hacia adelante (`Peekable::
+  next_if`) sin colectarlo en un `Vec`; `prev_word` sí necesita el `Vec`, porque camina para
+  atrás y no hay forma barata de indexar un `&str` desde el final sin conocerlo.
+
+**Callejones sin salida:**
+- Cambiar `Ask::controls()` a `Cow<'static, str>` para que el hint varíe según el estado
+  (`searching`). Innecesario: un `&'static str` alcanza con un `if`/`match` que devuelve un
+  literal distinto por rama — no hace falta owned nada.
+- La primera versión de `MultiSelect::matches()` con headers armaba un `Vec<bool>` de hits y
+  después un segundo pase mirando ventanas (`hits[at+1..].iter().zip(...)`) para decidir si un
+  heading sobrevive. Correcto pero cuadrático en el peor caso y con doble allocación. El pase
+  único hacia atrás (ver Aprendido) hace lo mismo en una pasada.
+
+**Abierto:**
+- `Select`/`MultiSelect` no reordenan por score aunque el query matchee más fuerte en el hint
+  que en el label — queda así a pedido explícito de la sesión (ver D-025). Revisar si aparece
+  un caso real donde el orden estable no alcance.
+- `Password` tiene `.placeholder()` nuevo, pero nada más de lo que ganó `Input` esta sesión se
+  expuso ahí a propósito (selección/word-nav ya los hereda gratis por envolver `Input`).
+
+**Siguiente:**
+- El builder de prompts (`hint`, `initial`, `optional`) sigue siendo el pendiente de fondo,
+  sin tocar esta sesión — todo lo de arriba se coló antes por pedidos puntuales.
+
+---
+
 ## 2026-09-05 — Fase 5: rímel sale del crate, y todo lo caro se apaga
 
 **Hecho:**

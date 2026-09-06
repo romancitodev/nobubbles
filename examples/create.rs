@@ -188,6 +188,7 @@ fn ai_provider() -> Result<Option<&'static str>> {
 
   let title = format!("{} API key", provider.name);
   let _key = inline::password(&title)
+    .placeholder("sk-...")
     .validate(|key| {
       if key.len() < 8 {
         Err("that looks too short for a key".into())
@@ -205,6 +206,7 @@ fn main() -> Result<()> {
   let session = inline::intro("create-nobubbles")?;
 
   let name = inline::input("Project name")
+    .placeholder("my-app")
     .validate(|value| {
       if value.trim().is_empty() {
         Err("a project needs a name".into())
@@ -214,7 +216,10 @@ fn main() -> Result<()> {
     })
     .ask()?;
 
-  let about = inline::input("Description").multiline().ask()?;
+  let about = inline::input("Description")
+    .placeholder("what does it do?")
+    .multiline()
+    .ask()?;
 
   let template = TEMPLATES[inline::select("Template")
     .items(TEMPLATES.map(|t| t.name))

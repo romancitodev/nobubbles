@@ -240,8 +240,9 @@ fn main() -> Result<()> {
   }
   let kind = TYPES[kinds.strict().ask()?];
 
-  let scope = inline::input("Scope").ask()?;
+  let scope = inline::input("Scope").placeholder("e.g. auth, api").ask()?;
   let summary_line = inline::input("Summary")
+    .placeholder("short, imperative: add x, fix y")
     .validate(|value| {
       if value.trim().is_empty() {
         Err("a commit needs a subject".into())

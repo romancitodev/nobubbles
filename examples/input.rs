@@ -35,7 +35,7 @@ impl Component for Form {
 
 fn main() -> Result<()> {
   let form = Form {
-    user: Input::new(),
+    user: Input::new().placeholder("username"),
     submitted: signal(false),
     prefferred_language: Select::new(["Rust", "Python", "JavaScript"].into_iter()),
   };

@@ -6,6 +6,10 @@
 //! worker thread, and rímel doing the parts a widget can't: the badge, the boxes, the block
 //! art, and the titles when rainbow mode is on.
 //!
+//! Autocomplete shows up twice, once each way: strict for the planet, because "Mars" is not a
+//! valid answer to a question about where Deep Thought lives; relaxed for the strategy,
+//! because half the fun is being allowed to make one up.
+//!
 //! Rainbow mode is a question the CLI asks. Say yes and every prompt title gets a pastel ramp
 //! — a title is a rímel block, so it can carry its own colours. Say no and it is catppuccin
 //! all the way down. Either way the ramp on the bar and on the answer stays: a CLI where
@@ -77,6 +81,18 @@ const SUBSYSTEMS: [(&str, &str); 6] = [
   ("towel warmer", ""),
   ("bistromathics", "(non-linear, non-euclidean)"),
   ("somebody else's problem field", "(you cannot see this one)"),
+];
+
+/// Where a supercomputer might live. Strict: type anything else and the closer refuses it.
+const PLANETS: [&str; 4] = ["Earth", "Magrathea", "Vogsphere", "Damogran"];
+
+/// A starting point for the strategy autocomplete. Relaxed: none of these is required, typing
+/// something that matches none of them is still a fine answer.
+const STRATEGIES: [(&str, &str); 4] = [
+  ("brute force", ""),
+  ("monte carlo", ""),
+  ("vogon deduction", "(bureaucratic, technically valid)"),
+  ("sleep on it", ""),
 ];
 
 /// Block art, because the answer deserves it.
@@ -243,7 +259,7 @@ fn compute(look: Look, picked: &[usize], deep: bool) -> Result<u32> {
         Text::new("7½ million years, give or take").style(Style::new().fg(palette::OVERLAY0));
       cx.render(Prompt::new(
         PromptState::Submitted,
-        look.title("Thinking"),
+        look.title("Thinking").settled(palette::OVERLAY1),
         done,
       ));
       quit();
@@ -363,7 +379,30 @@ fn main() -> Result<()> {
     inline::log::warn("no subsystems, so the answer will be mostly vibes");
   }
 
+  // Strict: faster than arrowing through four planets, but "Mars" still gets refused —
+  // `.strict()` only accepts a value that's word-for-word one of `.items()`.
+  let planet = inline::autocomplete(look.title("Which planet is this running on?"))
+    .items(PLANETS)
+    .placeholder("Earth, Magrathea, ...")
+    .strict()
+    .ask()?;
+
+  // Relaxed (the default): pick one fast, or ignore the list and type your own.
+  let mut strategy = inline::autocomplete(look.title("Computation strategy?"))
+    .items(STRATEGIES.map(|(name, _)| name))
+    .placeholder("pick one, or make one up");
+  for (at, (_, note)) in STRATEGIES.iter().enumerate() {
+    if !note.is_empty() {
+      strategy = strategy.note(at, *note);
+    }
+  }
+  let strategy = strategy.ask()?;
+  if !STRATEGIES.iter().any(|(name, _)| *name == strategy) {
+    inline::log::info(format!("\"{strategy}\" is not on the list. bold. logging it anyway"));
+  }
+
   let name = inline::input(look.title("Name this instance"))
+    .placeholder("e.g. HAL, Skynet Jr.")
     .validate(|value| match value.trim() {
       "" => Err("even a computer gets a name".into()),
       "42" => Err("that's the answer, not the question".into()),
@@ -372,7 +411,9 @@ fn main() -> Result<()> {
     })
     .ask()?;
 
-  inline::log::step(format!("{name} will compute {question}"));
+  inline::log::step(format!(
+    "{name} will compute {question}, on {planet}, via {strategy}"
+  ));
   inline::log::block(&quote());
 
   if !inline::confirm(look.title("Start the long think?")).ask()? {

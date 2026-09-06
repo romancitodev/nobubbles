@@ -675,6 +675,12 @@ biblioteca linda que sumábamos.
 
 Default: **80 crates**. Con `full`: 92. Con todo: 144.
 
+**Actualización 2026-09-06:** `fuzzy-matcher` (D-025) entró al build por defecto — no
+detrás de una feature, porque no es caro: `cargo add` sólo bloqueó 2 paquetes
+nuevos (`fuzzy-matcher` + `thread_local`). Default pasa a **82 crates**, full a
+**94**. La tabla de arriba queda como estaba al momento de D-024; este número
+es el que vale hoy.
+
 **Los ejemplos declaran `required-features`**, así `cargo build --examples` no
 falla ni arrastra nada de más.
 
@@ -685,3 +691,85 @@ de HSL para lo primero y bastante más para lo segundo.
 
 **Se revisa si:** alguna feature deja de ser opcional de hecho, o si el default
 vuelve a crecer sin que nadie lo mire.
+
+---
+
+## D-025 — Search en `Select`/`MultiSelect`: `fuzzy-matcher`, filtra pero no reordena, detrás de `.filter()`
+
+**Estado:** aceptada · 2026-09-06
+
+**Por qué `fuzzy-matcher` y no `skim`:** el pedido original era buscar como
+skim/fzf. La crate `skim` (skim-rs/skim) tal cual es una app de terminal
+completa: por defecto trae `clap`, decodificación de imágenes e IPC (features
+`cli`, `image`, `listen` prendidas), y corre su propio loop sobre la terminal —
+que compite con el engine de nobubbles por ella. Lo que hacía falta era sólo el
+algoritmo de scoring, publicado aparte como `fuzzy-matcher` (mismo autor, sin
+deps por defecto): 2 crates nuevos (`fuzzy-matcher` + `thread_local`, ver
+actualización en D-024) contra aislar el matcher interno de un binario entero.
+
+**Filtra, no reordena:** `Select` y `MultiSelect` esconden lo que no matchea,
+pero no cambian el orden de lo que queda. Reordenar por score andaría bien en
+un `Select` plano, pero rompería el agrupamiento de `MultiSelect`: una fila que
+sube de posición por tener mejor score se separaría de su heading, que es
+exactamente lo que los grupos existen para evitar. Un solo comportamiento para
+los dos widgets gana a una regla especial por cada uno.
+
+**Detrás de `.filter()`, no siempre activo:** sin la llamada, `/` no hace nada
+— igual que antes de que existiera la feature. Así una lista de opciones que
+por casualidad tiene un literal `/` no gana un modo que nadie pidió.
+
+**El query matchea el label O la `.note()`:** un hint es contenido; esconder
+una opción porque el query pegó en el aside y no en el label leería raro. Sin
+prioridad entre los dos — un match en la nota no pesa más que uno en el label,
+decisión explícita de la sesión, no un descuido.
+
+**Se revisa si:** aparece un caso real donde el orden estable no alcance — una
+lista larga donde lo más parecido tiene que quedar arriba. Ahí se agrega
+reordenamiento por score, no antes, y probablemente sólo para `Select` (sin
+headers no hay nada que reordenar pueda romper).
+
+---
+
+## D-026 — `Autocomplete`: strict/relaxed es un validator, no estado del widget
+
+**Estado:** aceptada · 2026-09-06
+
+**Por qué:** `components::autocomplete::Autocomplete` no sabe si la respuesta
+tiene que estar en la lista. `inline::autocomplete().strict()` sólo instala el
+mismo `Check` que ya usa cualquier prompt de texto (`.validate()`): un closure
+que refusa si el texto tipeado no es, palabra por palabra, uno de los
+`.items()`. Si se llaman los dos, `.validate()` explícito pisa a `.strict()` —
+no se combinan.
+
+**Consecuencia:** el widget en sí siempre se comporta "relajado" — sólo
+colecciona texto y una sugerencia resaltada. Toda la diferencia entre las dos
+formas de usarlo vive en la capa `inline::`, en un closure de pocas líneas.
+Cero campo `strict` en `Autocomplete`, cero rama nueva en su `on_key`.
+
+**Se revisa si:** aparece un caso que necesite decidir "está en la lista o no"
+en el render mismo — por ejemplo, tachar visualmente un valor tipeado que no
+matchea ninguna opción. Ahí sí el widget necesitaría saberlo.
+
+---
+
+## D-027 — `Block::settled` limpia `restless` a mano; `map_cells` no
+
+**Estado:** aceptada · 2026-09-06
+
+**El choque:** `map_cells` preserva `restless` a propósito — es lo que deja que
+un efecto propio (`Block::animated()` + tu propio reloj) siga pidiendo cuadros
+después de recolorear, documentado en su propio doc comment. `Block::settled`
+quiere exactamente lo contrario: apagar la animación para siempre, sea cual
+sea su origen (`animate`/`pulse` con ramp, o `animated()` a mano). Llamar
+`map_cells` sin más no apaga un bloque marcado `.animated()`, porque se lo
+devuelve intacto — descubierto por un doctest que fallaba con
+`assert!(!done.is_animated())`.
+
+**Resolución:** `settled` llama `map_cells` (que ya vacía el campo `gradient`)
+y después fuerza `restless = false` a mano. El test
+`settled_stops_a_hand_rolled_effect_from_asking_for_more_frames` es el que
+hubiera fallado con el primer intento (`map_cells` solo, sin el `restless =
+false` extra).
+
+**Se revisa si:** aparece un tercer significado de "detener la animación" que
+`settled` no cubra.
