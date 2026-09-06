@@ -14,40 +14,62 @@
 use std::fmt::Display;
 use std::io::Write;
 
-use crossterm::style::Stylize;
-
 use crate::components::prompt::BAR;
+use crate::rimel;
+use crate::style::{Color, palette};
+
+/// A marker painted with the palette.
+fn mark(glyph: &str, color: Color) -> String {
+  rimel::text(glyph).fg(color).to_string()
+}
+
+/// The rail between lines.
+fn rail() -> String {
+  mark(BAR, palette::SURFACE2)
+}
 
 /// Neutral. The line just sits on the rail.
 pub fn info(message: impl Display) {
-  write(BAR.dark_grey().to_string(), message);
+  write(rail(), message);
 }
 
 /// Something finished.
 pub fn success(message: impl Display) {
-  write("◇".green().to_string(), message);
+  write(mark("◇", palette::GREEN), message);
 }
 
 /// Something is worth knowing before it bites.
 pub fn warn(message: impl Display) {
-  write("▲".yellow().to_string(), message);
+  write(mark("▲", palette::PEACH), message);
 }
 
 /// Something went wrong, without ending the session.
 pub fn error(message: impl Display) {
-  write("■".red().to_string(), message);
+  write(mark("■", palette::RED), message);
 }
 
 /// A step that is about to happen, rather than one that already did.
 pub fn step(message: impl Display) {
-  write("◆".cyan().to_string(), message);
+  write(mark("◆", palette::MAUVE), message);
+}
+
+/// A rímel block on the rail.
+///
+/// Not `println!`: a session holds the terminal in raw mode, where a bare newline drops a row
+/// without returning the carriage.
+pub fn block(block: &rimel::Block) {
+  let bar = rail();
+  for line in block.to_string().lines() {
+    line_out(&format!("{bar}  {line}"));
+  }
+  line_out(&bar);
 }
 
 /// A titled block: the title on the marker line, the body indented under the rail.
 pub fn note(title: impl Display, body: impl Display) {
-  write("◇".green().to_string(), title);
+  write(mark("◇", palette::GREEN), title);
 
-  let bar = BAR.dark_grey().to_string();
+  let bar = rail();
   for line in body.to_string().lines() {
     line_out(&format!("{bar}  {line}"));
   }
@@ -58,14 +80,10 @@ pub fn note(title: impl Display, body: impl Display) {
 /// going into whatever comes next.
 fn write(marker: String, message: impl Display) {
   for (i, line) in message.to_string().lines().enumerate() {
-    let prefix = if i == 0 {
-      marker.clone()
-    } else {
-      BAR.dark_grey().to_string()
-    };
+    let prefix = if i == 0 { marker.clone() } else { rail() };
     line_out(&format!("{prefix}  {line}"));
   }
-  line_out(&BAR.dark_grey().to_string());
+  line_out(&rail());
 }
 
 /// `\r\n` and not `println!`: a session holds the terminal in raw mode, where a bare newline

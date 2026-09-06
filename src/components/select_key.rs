@@ -9,7 +9,7 @@ use ratatui::{
 use crate::{
   components::Render,
   signals::{Signal, signal},
-  style::{Color, Style},
+  style::{Style, palette},
 };
 
 /// The painted parts of a [`SelectKey`].
@@ -23,7 +23,7 @@ pub struct SelectKeyStyle {
 impl Default for SelectKeyStyle {
   fn default() -> Self {
     Self {
-      key: Style::new().fg(Color::Cyan).bold(),
+      key: Style::new().fg(palette::MAUVE).bold(),
       label: Style::default(),
     }
   }

@@ -7,7 +7,7 @@ use ratatui::{
 use crate::{
   components::Render,
   signals::{Signal, signal},
-  style::{Color, Style},
+  style::{Style, palette},
 };
 
 /// The painted parts of a [`Confirm`].
@@ -28,8 +28,8 @@ impl Default for ConfirmStyle {
       active_symbol: "●",
       inactive_symbol: "○",
       divider: " / ",
-      active: Style::new().fg(Color::Green),
-      inactive: Style::new().dim(),
+      active: Style::new().fg(palette::GREEN),
+      inactive: Style::new().fg(palette::OVERLAY1),
     }
   }
 }

@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use crate::{
   components::{Buffer, Rect, Render},
-  style::{Color, Style},
+  style::{Style, palette},
 };
 
 /// Columns the rail takes before the content starts.
@@ -27,20 +27,20 @@ impl PromptState {
   /// The marker on the header line.
   fn marker(self) -> (&'static str, Style) {
     match self {
-      Self::Active => ("◆", Style::new().fg(Color::Cyan)),
-      Self::Submitted => ("◇", Style::new().fg(Color::Green)),
-      Self::Cancelled => ("■", Style::new().fg(Color::Red)),
-      Self::Error => ("▲", Style::new().fg(Color::Yellow)),
+      Self::Active => ("◆", Style::new().fg(palette::MAUVE)),
+      Self::Submitted => ("◇", Style::new().fg(palette::GREEN)),
+      Self::Cancelled => ("■", Style::new().fg(palette::RED)),
+      Self::Error => ("▲", Style::new().fg(palette::PEACH)),
     }
   }
 
   /// The rail itself.
   fn rail(self) -> Style {
     match self {
-      Self::Active => Style::new().fg(Color::Cyan),
-      Self::Submitted => Style::new().dim(),
-      Self::Cancelled => Style::new().fg(Color::Red),
-      Self::Error => Style::new().fg(Color::Yellow),
+      Self::Active => Style::new().fg(palette::MAUVE),
+      Self::Submitted => Style::new().fg(palette::SURFACE2),
+      Self::Cancelled => Style::new().fg(palette::RED),
+      Self::Error => Style::new().fg(palette::PEACH),
     }
   }
 
@@ -130,9 +130,8 @@ impl<R: Render> Render for Prompt<R> {
 
         if let Some(hint) = self.hint.as_ref() {
           let style = match self.state {
-            PromptState::Active => Style::new().dim(),
-            PromptState::Error => Style::new().fg(Color::Yellow),
-            PromptState::Submitted | PromptState::Cancelled => Style::new().dim(),
+            PromptState::Error => Style::new().fg(palette::PEACH),
+            _ => Style::new().fg(palette::OVERLAY0),
           };
 
           if self.state != PromptState::Submitted {

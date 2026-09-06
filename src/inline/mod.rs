@@ -17,9 +17,14 @@ pub use components::select::{Select, Strict, select};
 pub use components::select_key::{SelectKey, select_key};
 pub use components::task::{Report, task};
 
-use crossterm::style::Stylize;
-
 use crate::components::prompt::{BAR, BAR_END, BAR_START};
+use crate::rimel;
+use crate::style::palette;
+
+/// The rail, in the palette. Printed, so it has to carry its own colour.
+fn rail(glyph: &str) -> String {
+  rimel::text(glyph).fg(palette::SURFACE2).to_string()
+}
 
 /// Keeps the terminal in raw mode for as long as it's alive.
 ///
@@ -81,8 +86,8 @@ pub fn intro(title: &str) -> eyre::Result<Session> {
   // Printed before raw mode goes on, so the newlines still return the carriage and the first
   // prompt anchors its viewport on the line below. The trailing bar is what the first prompt
   // hangs off.
-  println!("{}  {title}", BAR_START.dark_grey());
-  println!("{}", BAR.dark_grey());
+  println!("{}  {title}", rail(BAR_START));
+  println!("{}", rail(BAR));
   Session::open()
 }
 
@@ -116,7 +121,7 @@ impl Outro {
 
     println!(
       "{}  {}",
-      BAR_END.dark_grey(),
+      rail(BAR_END),
       lines.next().unwrap_or_default()
     );
     for line in lines {

@@ -6,7 +6,7 @@ use ratatui::{
 use crate::{
   components::Render,
   signals::{Signal, signal},
-  style::{Color, Style},
+  style::{Style, palette},
 };
 
 /// Spinner frames for a progress with no ratio yet.
@@ -27,8 +27,8 @@ pub struct ProgressStyle {
 impl Default for ProgressStyle {
   fn default() -> Self {
     Self {
-      filled: Style::new().fg(Color::LightGreen),
-      unfilled: Style::new().fg(Color::DarkGray),
+      filled: Style::new().fg(palette::MAUVE),
+      unfilled: Style::new().fg(palette::SURFACE1),
       label: Style::new(),
       filled_symbol: "━",
       unfilled_symbol: "━",
