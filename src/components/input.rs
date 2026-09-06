@@ -61,13 +61,21 @@ impl Input {
     self
   }
 
-  /// What to draw: the value, or one dot per grapheme.
+  /// A fixed-width mask, not one dot per grapheme: matching the real length on screen is
+  /// exactly the kind of leak masking is supposed to prevent (shoulder-surfing, screen
+  /// recordings). Empty stays empty, so the placeholder still shows before anything's typed.
+  const MASK_WIDTH: usize = 12;
+
+  /// What to draw: the value, or a mask that says nothing about how long it really is.
   fn shown(&self) -> String {
     let value = self.value.get();
-    if self.masked.get() {
-      "•".repeat(value.graphemes(true).count())
+    if !self.masked.get() {
+      return value;
+    }
+    if value.is_empty() {
+      String::new()
     } else {
-      value
+      "•".repeat(Self::MASK_WIDTH)
     }
   }
 
@@ -504,6 +512,25 @@ mod tests {
     let _ = field.on_key(press(KeyCode::Char('x')));
     assert_eq!(rendered_text(field, 20), "x", "typing replaces it");
     assert_eq!(field.value(), "x", "and it was never the value to begin with");
+  }
+
+  #[test]
+  fn masked_input_hides_the_real_length() {
+    let field = Input::new().masked();
+    assert_eq!(rendered_text(field, 20), "", "empty stays empty, so a placeholder can show");
+
+    for c in "hi".chars() {
+      let _ = field.on_key(press(KeyCode::Char(c)));
+    }
+    let short = rendered_text(field, 20);
+
+    for c in "a much longer passphrase".chars() {
+      let _ = field.on_key(press(KeyCode::Char(c)));
+    }
+    let long = rendered_text(field, 20);
+
+    assert_eq!(short, long, "the mask must not grow with the real value");
+    assert!(!short.is_empty());
   }
 
   #[test]
