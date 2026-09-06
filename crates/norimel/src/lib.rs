@@ -14,6 +14,82 @@
 //! Two ways out of the same block: [`Display`](std::fmt::Display) writes ANSI for a
 //! `println!`, [`Block::runs`] hands the placed runs to whoever paints cells. Runs are never
 //! flattened into a string, so measuring and joining never parses ANSI back out.
+//!
+//! # Animation
+//!
+//! There is no timeline in here and no scheduler. An animation is a function from a clock to a
+//! block, and you build the block again every frame. That is the whole model. Everything below
+//! is either a shortcut for a common case or a way of telling the drawer what you are up to.
+//!
+//! ## Who asks for the next frame
+//!
+//! A terminal UI only repaints when something says it should — nobubbles sleeps on an idle
+//! timeout otherwise — so a block that changes on its own has to admit it.
+//! [`Block::is_animated`] is that admission, and whoever draws the block reads it.
+//!
+//! [`Block::animate`] and [`Block::pulse`] set it for you. When the movement is yours, say so
+//! with [`Block::animated`]. Forget it and you hit the bug everybody hits once: the ramp looks
+//! lovely for a single frame and then sits there until you press a key.
+//!
+//! ## The two motions that ship
+//!
+//! [`Block::animate`] lays the ramp across the columns and slides it sideways. Every character
+//! sits on a different point of the ramp, so the colours travel through the text.
+//!
+//! [`Block::pulse`] gives the whole block one colour and walks *that* along the ramp. Nothing
+//! travels; the block breathes.
+//!
+//! Both take a speed in turns of the ramp per second. Roughly: 0.1 crawls, 0.5 reads as
+//! moving, past 1.0 it starts to strobe. They share one clock, started the first time anything
+//! animated is composed, so two blocks at the same speed stay in step — which is usually what
+//! you want and is worth knowing when it isn't.
+//!
+//! ## Your own ramp
+//!
+//! [`Ramp`] wraps a [`colorgrad`] gradient, and that crate is re-exported here so you don't
+//! need it in your own manifest. The presets cover the wheel; anything else is a builder away.
+//!
+//! One trap, and it is the only one: a ramp for [`Block::pulse`] has to come back to where it
+//! started. A ramp that runs dim to bright and stops will snap back at the wrap and you get a
+//! flicker instead of a breath. Put the first colour last too.
+//!
+//! ## Your own motion
+//!
+//! [`Block::map_cells`] is the escape hatch. It hands you every cell after the shape is
+//! settled — the column, the row, and the style that cell ended up with, padding and border and
+//! joins all accounted for — and takes back the style you want:
+//!
+//! ```
+//! use norimel::{self as rimel, Block, Color};
+//!
+//! /// A bright band travelling left to right through whatever it is given.
+//! fn scan(block: Block, seconds: f32) -> Block {
+//!   let head = seconds * 18.0;
+//!
+//!   block
+//!     .map_cells(|column, _row, style| {
+//!       let distance = (head - f32::from(column)).rem_euclid(24.0);
+//!       if distance < 3.0 {
+//!         style.fg(Color::White).bold()
+//!       } else {
+//!         style.fg(Color::DarkGray)
+//!       }
+//!     })
+//!     .animated()
+//! }
+//!
+//! let line = scan(rimel::text("reticulating splines"), 0.4);
+//! assert_eq!(line.size(), (20, 1));
+//! ```
+//!
+//! That is a complete effect. It works on any block, it composes with everything else, and it
+//! lives in your crate.
+//!
+//! Two things to know before you write one. The block comes back **composed**, so utilities you
+//! apply afterwards wrap what you painted rather than reaching back into it — which is how you
+//! put a plain border around a scanning line. And `map_cells` splits the block into one run per
+//! grapheme, because that is the only way `column` can mean anything; irrelevant for a title,
+//! worth a thought if you are running it over a full screen every frame.
 
 use std::fmt;
 #[cfg(feature = "gradient")]
@@ -28,6 +104,10 @@ use unicode_width::UnicodeWidthStr;
 pub mod style;
 
 pub use style::{Color, Style, palette};
+
+/// Re-exported so [`Ramp::new`] has something to take without a second dependency.
+#[cfg(feature = "gradient")]
+pub use colorgrad;
 
 /// Where a row sits when the block is wider than it is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -45,6 +125,16 @@ pub enum VAlign {
   Top,
   Middle,
   Bottom,
+}
+
+/// How a ramp is laid over a block.
+#[cfg(feature = "gradient")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Drift {
+  /// Across the columns: every character its own point on the ramp.
+  Sweep,
+  /// All at once: the whole block takes one colour, and time walks it along the ramp.
+  Pulse,
 }
 
 /// A colour ramp, for [`Block::gradient`] and [`Block::animate`].
@@ -226,9 +316,12 @@ pub struct Block {
   width: Option<u16>,
   align: Align,
   border: Option<(Border, Style)>,
-  /// The ramp, and how many turns per second it drifts. Zero is a still gradient.
+  /// Set by hand for an effect this crate knows nothing about, so it still gets its frames.
+  restless: bool,
+  /// The ramp, how many turns per second it moves, and how it is laid over the block. A
+  /// speed of zero is a still gradient.
   #[cfg(feature = "gradient")]
-  gradient: Option<(Ramp, f32)>,
+  gradient: Option<(Ramp, f32, Drift)>,
 }
 
 /// Two blocks are equal when they compose to the same thing.
@@ -255,6 +348,30 @@ pub fn text(content: impl AsRef<str>) -> Block {
   Block {
     rows,
     ..Block::default()
+  }
+}
+
+impl From<&str> for Block {
+  fn from(content: &str) -> Self {
+    text(content)
+  }
+}
+
+impl From<&String> for Block {
+  fn from(content: &String) -> Self {
+    text(content)
+  }
+}
+
+impl From<String> for Block {
+  fn from(content: String) -> Self {
+    text(content)
+  }
+}
+
+impl From<std::borrow::Cow<'_, str>> for Block {
+  fn from(content: std::borrow::Cow<'_, str>) -> Self {
+    text(content)
   }
 }
 
@@ -319,18 +436,51 @@ impl Block {
   #[cfg(feature = "gradient")]
   #[must_use]
   pub fn gradient(mut self, ramp: Ramp) -> Self {
-    self.gradient = Some((ramp, 0.0));
+    self.gradient = Some((ramp, 0.0, Drift::Sweep));
     self
   }
 
-  /// A gradient that drifts `speed` turns per second.
+  /// A gradient that drifts `speed` turns of the colour wheel per second.
+  ///
+  /// Around 0.1 crawls, 0.5 reads as moving, past 1.0 it starts to strobe.
   ///
   /// rímel has no loop: it reads the clock while composing, so this moves for as long as
-  /// something keeps redrawing.
+  /// something keeps redrawing. [`Block::is_animated`] is how the drawer knows to ask.
+  ///
+  /// ```
+  /// use norimel::{self as rimel, Ramp};
+  ///
+  /// let title = rimel::text("deep thought").animate(Ramp::pastel(), 0.45);
+  /// assert!(title.is_animated());
+  /// ```
   #[cfg(feature = "gradient")]
   #[must_use]
   pub fn animate(mut self, ramp: Ramp, speed: f32) -> Self {
-    self.gradient = Some((ramp, speed));
+    self.gradient = Some((ramp, speed, Drift::Sweep));
+    self
+  }
+
+  /// One colour for the whole block, walking along the ramp `speed` turns per second.
+  ///
+  /// The other way to move a ramp: [`Block::animate`] slides it across the columns, this one
+  /// makes the block breathe. A ramp that comes back to where it started — dim, bright, dim —
+  /// pulses without a seam:
+  ///
+  /// ```
+  /// use norimel::{self as rimel, Ramp, colorgrad};
+  ///
+  /// let breathe = Ramp::new(
+  ///   colorgrad::GradientBuilder::new()
+  ///     .html_colors(&["#585b70", "#cba6f7", "#585b70"])
+  ///     .build::<colorgrad::LinearGradient>()
+  ///     .unwrap(),
+  /// );
+  /// let line = rimel::text("thinking").pulse(breathe, 0.5);
+  /// ```
+  #[cfg(feature = "gradient")]
+  #[must_use]
+  pub fn pulse(mut self, ramp: Ramp, speed: f32) -> Self {
+    self.gradient = Some((ramp, speed, Drift::Pulse));
     self
   }
 
@@ -438,6 +588,84 @@ impl Block {
     self
   }
 
+  /// Whether this block changes on its own, i.e. carries a drifting ramp.
+  ///
+  /// Whoever is drawing it has to ask for the next frame while it is on screen; the block has
+  /// no loop of its own.
+  #[must_use]
+  pub fn is_animated(&self) -> bool {
+    #[cfg(feature = "gradient")]
+    {
+      self.restless || matches!(self.gradient, Some((_, speed, _)) if speed != 0.0)
+    }
+    #[cfg(not(feature = "gradient"))]
+    {
+      self.restless
+    }
+  }
+
+  /// Says this block changes on its own, so whoever draws it keeps asking for frames.
+  ///
+  /// [`Block::animate`] and [`Block::pulse`] set it for you. Reach for it when the movement
+  /// is yours — a block you rebuild every frame has no way of announcing itself otherwise.
+  #[must_use]
+  pub fn animated(mut self) -> Self {
+    self.restless = true;
+    self
+  }
+
+  /// Recolours the block one cell at a time, after the shape is worked out.
+  ///
+  /// The escape hatch for effects this crate doesn't have. You get the column, the row and
+  /// the style each cell ended up with — padding, border and joins already accounted for —
+  /// and hand back the style you want. Pair it with [`Block::animated`] and a clock and you
+  /// have written your own `animate` without touching this crate.
+  ///
+  /// ```
+  /// use norimel::{self as rimel, Color};
+  ///
+  /// // A left-to-right wipe: everything past `at` goes dim.
+  /// fn wipe(block: rimel::Block, at: u16) -> rimel::Block {
+  ///   block.map_cells(|x, _row, style| {
+  ///     if x < at { style } else { style.fg(Color::DarkGray) }
+  ///   })
+  /// }
+  ///
+  /// let line = wipe(rimel::text("loading forever").fg(Color::Green), 7);
+  /// assert_eq!(line.size(), (15, 1));
+  /// ```
+  ///
+  /// The block comes back composed, so the utilities you had already applied are baked in and
+  /// anything you add afterwards wraps what you just painted.
+  #[must_use]
+  pub fn map_cells(self, paint: impl Fn(u16, u16, Style) -> Style) -> Block {
+    let restless = self.restless;
+    let rows = self
+      .compose()
+      .into_iter()
+      .enumerate()
+      .map(|(row, runs)| {
+        let y = u16::try_from(row).unwrap_or(u16::MAX);
+        let mut x = 0;
+        let mut cells = Vec::new();
+
+        for run in runs {
+          for grapheme in run.text.graphemes(true) {
+            cells.push(Run::new(grapheme, paint(x, y, run.style)));
+            x = x.saturating_add(width_of(grapheme));
+          }
+        }
+        cells
+      })
+      .collect();
+
+    Block {
+      rows,
+      restless,
+      ..Block::default()
+    }
+  }
+
   /// Columns and rows it takes, everything the utilities add included.
   #[must_use]
   pub fn size(&self) -> (u16, u16) {
@@ -477,12 +705,28 @@ impl Block {
       })
       .collect();
 
-    // Before the padding: the ramp belongs to the text, not to the box around it.
+    // Before the padding: the ramp belongs to the text, not to the box around it. The span is
+    // the whole block and not each row, or a short row would run through the same colours in
+    // fewer columns and the ramp would shear.
     #[cfg(feature = "gradient")]
-    if let Some((ramp, speed)) = &self.gradient {
+    if let Some((ramp, speed, drift)) = &self.gradient {
       let phase = if *speed == 0.0 { 0.0 } else { clock() * speed };
-      for row in &mut rows {
-        *row = spread(row, ramp, phase);
+
+      match drift {
+        Drift::Sweep => {
+          let span = rows.iter().map(|row| row_width(row)).max().unwrap_or(1).max(1);
+          for row in &mut rows {
+            *row = spread(row, ramp, phase, span);
+          }
+        }
+        Drift::Pulse => {
+          let color = ramp.at(phase);
+          for row in &mut rows {
+            for run in row.iter_mut() {
+              run.style = run.style.fg(color);
+            }
+          }
+        }
       }
     }
 
@@ -525,8 +769,8 @@ impl Block {
 
 /// One run per grapheme, each with its own point on the ramp.
 #[cfg(feature = "gradient")]
-fn spread(row: &[Run], ramp: &Ramp, phase: f32) -> Vec<Run> {
-  let total = f32::from(row_width(row).max(1));
+fn spread(row: &[Run], ramp: &Ramp, phase: f32, span: u16) -> Vec<Run> {
+  let total = f32::from(span);
   let mut out = Vec::new();
   let mut at = 0u16;
 
@@ -856,6 +1100,63 @@ mod tests {
       };
       assert!(u16::from(r) + u16::from(g) + u16::from(b) > 450, "{r} {g} {b}");
     }
+  }
+
+  /// The ramp spans the block, so the same column is the same colour on every row.
+  #[cfg(feature = "gradient")]
+  #[test]
+  fn a_gradient_does_not_shear_between_rows_of_different_length() {
+    let block = text("abcd
+ab").gradient(Ramp::rainbow());
+    let placed: Vec<(u16, u16, Color)> = block
+      .runs()
+      .map(|(x, y, _, style)| (x, y, style.fg))
+      .collect();
+
+    let top = placed.iter().find(|(x, y, _)| *x == 1 && *y == 0).unwrap();
+    let below = placed.iter().find(|(x, y, _)| *x == 1 && *y == 1).unwrap();
+    assert_eq!(top.2, below.2);
+  }
+
+  /// The escape hatch: a style per cell, with the shape already settled.
+  #[test]
+  fn map_cells_paints_after_the_padding_is_in() {
+    let block = text("ab").px(1).map_cells(|x, _, style| {
+      if x == 0 {
+        style.fg(Color::Red)
+      } else {
+        style
+      }
+    });
+
+    let painted: Vec<(u16, String, Color)> = block
+      .runs()
+      .map(|(x, _, text, style)| (x, text, style.fg))
+      .collect();
+
+    assert_eq!(painted.len(), 4, "one cell per column, padding included");
+    assert_eq!(painted[0], (0, " ".to_owned(), Color::Red));
+    assert_eq!(painted[1], (1, "a".to_owned(), Color::Reset));
+  }
+
+  #[test]
+  fn a_block_can_say_it_moves_on_its_own() {
+    assert!(!text("x").is_animated());
+    assert!(text("x").animated().is_animated());
+    // And it survives the escape hatch, or a hand-rolled effect would stop getting frames.
+    assert!(text("x").animated().map_cells(|_, _, s| s).is_animated());
+  }
+
+  /// A pulse is the other axis: one colour for everything, taken from the ramp by time.
+  #[cfg(feature = "gradient")]
+  #[test]
+  fn a_pulse_paints_the_whole_block_one_colour() {
+    let block = text("abcd").pulse(Ramp::rainbow(), 0.0);
+    let colors: Vec<Color> = block.runs().map(|(.., style)| style.fg).collect();
+
+    assert_eq!(colors, [Ramp::rainbow().at(0.0)]);
+    assert!(!block.is_animated(), "a still pulse asks for no frames");
+    assert!(text("abcd").pulse(Ramp::rainbow(), 0.5).is_animated());
   }
 
   /// The ramp colours the text and stops there: padding keeps the block's background.
