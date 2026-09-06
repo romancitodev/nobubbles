@@ -49,6 +49,15 @@ impl<'a> Text<'a> {
     }
   }
 
+  /// Muted hint text, shown only while the field is empty.
+  #[must_use]
+  pub fn placeholder(self, text: &'static str) -> Self {
+    Self {
+      field: self.field.placeholder(text),
+      ..self
+    }
+  }
+
   /// Refuses the answer with a reason instead of submitting it.
   ///
   /// The prompt stays live and turns yellow with the message on the closer, so a refusal is

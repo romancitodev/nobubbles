@@ -9,6 +9,7 @@ use crate::{
 /// Asks for something secret. Dots on screen, dots in the transcript.
 pub struct Password<'a> {
   prompt: Block,
+  placeholder: Option<&'static str>,
   check: Option<Validator<'a>>,
 }
 
@@ -16,11 +17,21 @@ pub struct Password<'a> {
 pub fn password(prompt: impl Into<Block>) -> Password<'static> {
   Password {
     prompt: prompt.into(),
+    placeholder: None,
     check: None,
   }
 }
 
 impl<'a> Password<'a> {
+  /// Muted hint text, shown only while the field is empty.
+  #[must_use]
+  pub fn placeholder(self, text: &'static str) -> Self {
+    Self {
+      placeholder: Some(text),
+      ..self
+    }
+  }
+
   /// Refuses the answer with a reason instead of submitting it. Sees the real value, which
   /// is the whole reason a length rule can work here.
   #[must_use]
@@ -36,7 +47,10 @@ impl<'a> Password<'a> {
   /// # Errors
   /// Fails if the terminal can't be set up, or `Cancelled` if the user pressed Ctrl+C.
   pub fn ask(self) -> Result<String> {
-    let field = Input::new().masked();
+    let mut field = Input::new().masked();
+    if let Some(placeholder) = self.placeholder {
+      field = field.placeholder(placeholder);
+    }
 
     // The check runs on the real value, not on the dots `answer()` reports.
     let check = self.check;

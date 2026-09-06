@@ -8,14 +8,21 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::{
   components::Render,
   signals::{Signal, signal},
+  style::{Style, palette},
 };
 
 #[derive(Clone, Copy)]
 pub struct Input {
   value: Signal<String>,
   cursor: Signal<usize>,
+  /// The other end of a selection, grapheme index. `None` is "no selection", not "empty
+  /// selection" — equal to `cursor` reads the same way and is treated as none too.
+  anchor: Signal<Option<usize>>,
   multiline: Signal<bool>,
   masked: Signal<bool>,
+  /// Shown, muted, only while the value is empty. Never part of the value — `&'static str`
+  /// and not owned, since a hint is UI text set once at construction, not user data.
+  placeholder: Option<&'static str>,
 }
 
 impl Input {
@@ -29,8 +36,20 @@ impl Input {
     Self {
       value: signal(initial.into()),
       cursor: signal(0),
+      anchor: signal(None),
       multiline: signal(false),
       masked: signal(false),
+      placeholder: None,
+    }
+  }
+
+  /// Muted hint text, shown only while the field is empty — gone the moment anything is
+  /// typed, and never part of [`Input::value`].
+  #[must_use]
+  pub fn placeholder(self, text: &'static str) -> Self {
+    Self {
+      placeholder: Some(text),
+      ..self
     }
   }
 
@@ -82,6 +101,16 @@ impl Input {
     self.value.get()
   }
 
+  /// Replaces the whole value, puts the cursor at the end, and drops any selection — for
+  /// when something outside a keystroke decides what the field says, like a suggestion
+  /// getting accepted.
+  pub fn set(&self, text: impl Into<String>) {
+    let text = text.into();
+    self.cursor.set(Self::grapheme_count(&text));
+    self.value.set(text);
+    self.anchor.set(None);
+  }
+
   /// Writes `c` at the cursor and steps past it.
   fn insert(&self, c: char) {
     let mut value = self.value.borrow_mut();
@@ -91,53 +120,185 @@ impl Input {
     self.cursor.update(|at| *at += 1);
   }
 
+  /// A grapheme counts as part of a word if its first scalar value is alphanumeric or `_` —
+  /// the same class most editors use for ctrl+arrow and ctrl+backspace.
+  fn is_word_char(grapheme: &str) -> bool {
+    grapheme.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_')
+  }
+
+  /// The grapheme index one word to the right of `cursor`: skip the run of separators the
+  /// cursor is in front of, then skip the run of word characters after that — landing just
+  /// past the next word, the way readline's `forward-word` does.
+  ///
+  /// Walked forward off the grapheme iterator directly rather than collected into a `Vec`
+  /// first: unlike `prev_word`, nothing here needs to be indexed from the end.
+  fn next_word(value: &str, cursor: usize) -> usize {
+    let mut at = cursor;
+    let mut graphemes = value.graphemes(true).skip(cursor).peekable();
+    while graphemes.next_if(|&g| !Self::is_word_char(g)).is_some() {
+      at += 1;
+    }
+    while graphemes.next_if(|&g| Self::is_word_char(g)).is_some() {
+      at += 1;
+    }
+    at
+  }
+
+  /// The mirror of `next_word`, walking left: skip separators, then skip word characters,
+  /// landing at the start of the previous word.
+  fn prev_word(value: &str, cursor: usize) -> usize {
+    let graphemes: Vec<&str> = value.graphemes(true).collect();
+    let mut at = cursor;
+    while at > 0 && !Self::is_word_char(graphemes[at - 1]) {
+      at -= 1;
+    }
+    while at > 0 && Self::is_word_char(graphemes[at - 1]) {
+      at -= 1;
+    }
+    at
+  }
+
+  /// Removes graphemes `[from, to)` and leaves the cursor at `from`. A no-op, not a panic,
+  /// when the range is empty or backwards — callers hand in raw cursor/anchor pairs.
+  fn delete_range(&self, from: usize, to: usize) {
+    if from >= to {
+      return;
+    }
+    let mut value = self.value.borrow_mut();
+    let start = Self::byte_offset(&value, from);
+    let end = Self::byte_offset(&value, to);
+    value.replace_range(start..end, "");
+    drop(value);
+    self.cursor.set(from);
+  }
+
+  /// Deletes the selection, if there is one, and answers whether it did — so a caller like
+  /// `Backspace` can fall back to its usual one-grapheme behaviour when there wasn't one.
+  fn delete_selection(&self) -> bool {
+    let cursor = self.cursor.get();
+    let Some(anchor) = self.anchor.get().filter(|&a| a != cursor) else {
+      self.anchor.set(None);
+      return false;
+    };
+    self.delete_range(anchor.min(cursor), anchor.max(cursor));
+    self.anchor.set(None);
+    true
+  }
+
+  /// What typing a character does when a selection is live: the character replaces it,
+  /// rather than landing next to it.
+  fn replace_selection_with(&self, c: char) {
+    self.delete_selection();
+    self.insert(c);
+  }
+
+  /// If a real selection is live, collapses it to one edge and answers where — the near edge
+  /// walking left, the far edge walking right. What a plain (unshifted) arrow does to a
+  /// selection in most editors: the first press lands on the edge, it doesn't move past it.
+  fn collapse_selection(&self, towards_end: bool) -> Option<usize> {
+    let cursor = self.cursor.get();
+    let anchor = self.anchor.get().filter(|&a| a != cursor)?;
+    self.anchor.set(None);
+    Some(if towards_end { anchor.max(cursor) } else { anchor.min(cursor) })
+  }
+
+  /// Moves the cursor to wherever `advance` says. With shift held, starts (or extends) a
+  /// selection from the cursor's position before the move; without it, drops any selection.
+  fn move_cursor(&self, shift: bool, advance: impl FnOnce(&str, usize) -> usize) {
+    if shift {
+      if self.anchor.get().is_none() {
+        self.anchor.set(Some(self.cursor.get()));
+      }
+    } else {
+      self.anchor.set(None);
+    }
+
+    let value = self.value.borrow();
+    let next = advance(&value, self.cursor.get());
+    drop(value);
+    self.cursor.set(next);
+  }
+
   /// Trigger function to handle key events for the input. Returns true if the key event was handled, false otherwise.
   #[must_use]
   pub fn on_key(&self, key: KeyEvent) -> bool {
-    // Control sequences belong to whoever is driving: without this, ctrl+s types an `s`.
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
+    // Left/Right/Backspace/Delete opt into ctrl (word-wise) and shift (selection); any other
+    // ctrl combination belongs to whoever is driving — without this, ctrl+s types an `s`.
+    if ctrl
+      && !matches!(
+        key.code,
+        KeyCode::Left | KeyCode::Right | KeyCode::Backspace | KeyCode::Delete
+      )
+    {
       return false;
     }
 
     match key.code {
       KeyCode::Enter if self.multiline.get() => {
+        self.delete_selection();
         self.insert('\n');
         true
       }
       KeyCode::Char(c) => {
-        self.insert(c);
+        self.replace_selection_with(c);
         true
       }
       KeyCode::Backspace => {
+        if self.delete_selection() {
+          return true;
+        }
         let cursor = self.cursor.get();
         if cursor == 0 {
           return true; // nothing before the cursor, but still an edit key
         }
-        let mut value = self.value.borrow_mut();
-        let start = Self::byte_offset(&value, cursor - 1);
-        let end = Self::byte_offset(&value, cursor);
-        value.replace_range(start..end, "");
-        self.cursor.update(|c| *c -= 1);
+        let from = if ctrl {
+          Self::prev_word(&self.value.borrow(), cursor)
+        } else {
+          cursor - 1
+        };
+        self.delete_range(from, cursor);
         true
       }
       KeyCode::Delete => {
-        let mut value = self.value.borrow_mut();
+        if self.delete_selection() {
+          return true;
+        }
         let cursor = self.cursor.get();
-        if cursor >= Self::grapheme_count(&value) {
+        let value = self.value.borrow();
+        let total = Self::grapheme_count(&value);
+        if cursor >= total {
           return true; // nothing after the cursor
         }
-        let start = Self::byte_offset(&value, cursor);
-        let end = Self::byte_offset(&value, cursor + 1);
-        value.replace_range(start..end, "");
+        let to = if ctrl { Self::next_word(&value, cursor) } else { cursor + 1 };
+        drop(value);
+        self.delete_range(cursor, to);
         true
       }
       KeyCode::Left => {
-        self.cursor.update(|c| *c = c.saturating_sub(1));
+        if !shift && let Some(at) = self.collapse_selection(false) {
+          self.cursor.set(at);
+        } else {
+          self.move_cursor(shift, |value, cursor| {
+            if ctrl { Self::prev_word(value, cursor) } else { cursor.saturating_sub(1) }
+          });
+        }
         true
       }
       KeyCode::Right => {
-        let total = Self::grapheme_count(&self.value.borrow());
-        self.cursor.update(|c| *c = (*c + 1).min(total));
+        if !shift && let Some(at) = self.collapse_selection(true) {
+          self.cursor.set(at);
+        } else {
+          self.move_cursor(shift, |value, cursor| {
+            if ctrl {
+              Self::next_word(value, cursor)
+            } else {
+              (cursor + 1).min(Self::grapheme_count(value))
+            }
+          });
+        }
         true
       }
       _ => false,
@@ -174,7 +335,8 @@ impl Render for Input {
 
   fn render(self, area: super::Rect, buf: &mut super::Buffer<'_>) {
     let value = self.shown();
-    let typed: String = value.graphemes(true).take(self.cursor.get()).collect();
+    let cursor = self.cursor.get();
+    let typed: String = value.graphemes(true).take(cursor).collect();
 
     // The row is how many newlines the cursor is past; the column is the width of what's
     // left on the current line. Columns and not graphemes, because a wide glyph takes two
@@ -191,7 +353,63 @@ impl Render for Input {
       area.y() + row.min(area.height().saturating_sub(1)),
     );
 
-    Widget::render(Paragraph::new(value), area.into(), buf.inner_mut());
+    let text: ratatui::text::Text = if value.is_empty()
+      && let Some(placeholder) = self.placeholder
+    {
+      ratatui::text::Line::styled(placeholder, Style::new().fg(palette::OVERLAY0)).into()
+    } else {
+      match self.anchor.get().filter(|&a| a != cursor) {
+        Some(anchor) => Self::highlighted(&value, anchor.min(cursor), anchor.max(cursor)),
+        None => value.into(),
+      }
+    };
+    Widget::render(Paragraph::new(text), area.into(), buf.inner_mut());
+  }
+}
+
+impl Input {
+  /// Splits `value` into lines and paints the graphemes in `[start, end)` — grapheme indices
+  /// over the whole value, newlines counted — in reverse video, so a selection is visible.
+  /// Built line by line and not as one `Span` with embedded `\n`s: a `Span` is one row, and a
+  /// newline inside one wouldn't break the line the way it does in a plain string.
+  fn highlighted(value: &str, start: usize, end: usize) -> ratatui::text::Text<'static> {
+    let reversed = ratatui::style::Style::new().add_modifier(ratatui::style::Modifier::REVERSED);
+    let mut at = 0;
+
+    let lines = value
+      .split('\n')
+      .map(|line| {
+        let graphemes: Vec<&str> = line.graphemes(true).collect();
+        let mut spans = Vec::new();
+        let mut plain = String::new();
+        let mut selected = String::new();
+
+        for (offset, grapheme) in graphemes.iter().enumerate() {
+          if (start..end).contains(&(at + offset)) {
+            if !plain.is_empty() {
+              spans.push(Span::raw(std::mem::take(&mut plain)));
+            }
+            selected.push_str(grapheme);
+          } else {
+            if !selected.is_empty() {
+              spans.push(Span::styled(std::mem::take(&mut selected), reversed));
+            }
+            plain.push_str(grapheme);
+          }
+        }
+        if !plain.is_empty() {
+          spans.push(Span::raw(plain));
+        }
+        if !selected.is_empty() {
+          spans.push(Span::styled(selected, reversed));
+        }
+
+        at += graphemes.len() + 1; // +1 for the newline this line was split off of
+        ratatui::text::Line::from(spans)
+      })
+      .collect::<Vec<_>>();
+
+    ratatui::text::Text::from(lines)
   }
 }
 
@@ -206,6 +424,10 @@ mod tests {
     KeyEvent::from(code)
   }
 
+  fn press_mod(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+    KeyEvent::new(code, modifiers)
+  }
+
   /// Renders into a fixed area away from the origin, so the caret has to be placed relative
   /// to the area and not to the buffer.
   fn caret(field: Input) -> Option<(u16, u16)> {
@@ -214,6 +436,23 @@ mod tests {
     let mut buf = Buffer::from(&mut raw);
     field.render(area.into(), &mut buf);
     buf.cursor()
+  }
+
+  /// The columns rendered in reverse video — the selection, if there is one.
+  fn reversed_columns(field: Input) -> Vec<u16> {
+    let area = RatatuiRect::new(0, 0, 20, 1);
+    let mut raw = ratatui::buffer::Buffer::empty(area);
+    let mut buf = Buffer::from(&mut raw);
+    field.render(area.into(), &mut buf);
+
+    (0..20)
+      .filter(|&x| {
+        raw[(x, 0)]
+          .style()
+          .add_modifier
+          .contains(ratatui::style::Modifier::REVERSED)
+      })
+      .collect()
   }
 
   #[test]
@@ -241,6 +480,30 @@ mod tests {
 
     let _ = field.on_key(press(KeyCode::Backspace));
     assert_eq!(caret(field), Some((4, 1)));
+  }
+
+  /// The rendered row, cursor styling aside — just the text.
+  fn rendered_text(field: Input, width: u16) -> String {
+    let area = RatatuiRect::new(0, 0, width, 1);
+    let mut raw = ratatui::buffer::Buffer::empty(area);
+    let mut buf = Buffer::from(&mut raw);
+    field.render(area.into(), &mut buf);
+
+    (0..width)
+      .map(|x| raw[(x, 0)].symbol().to_owned())
+      .collect::<String>()
+      .trim_end()
+      .to_owned()
+  }
+
+  #[test]
+  fn a_placeholder_shows_only_while_the_field_is_empty() {
+    let field = Input::new().placeholder("your name");
+    assert_eq!(rendered_text(field, 20), "your name");
+
+    let _ = field.on_key(press(KeyCode::Char('x')));
+    assert_eq!(rendered_text(field, 20), "x", "typing replaces it");
+    assert_eq!(field.value(), "x", "and it was never the value to begin with");
   }
 
   #[test]
@@ -289,5 +552,97 @@ b"
       "ctrl+s belongs to whoever is driving"
     );
     assert_eq!(field.value(), "", "and it is definitely not an `s`");
+  }
+
+  #[test]
+  fn ctrl_right_jumps_past_the_next_word() {
+    let field = Input::with("one two three");
+    assert!(field.on_key(press_mod(KeyCode::Right, KeyModifiers::CONTROL)));
+    assert_eq!(caret(field), Some((6, 1)), "past \"one\"");
+
+    assert!(field.on_key(press_mod(KeyCode::Right, KeyModifiers::CONTROL)));
+    assert_eq!(caret(field), Some((10, 1)), "past \"two\", over the space between");
+  }
+
+  #[test]
+  fn ctrl_left_jumps_to_the_start_of_the_previous_word() {
+    let field = Input::with("one two three");
+    for _ in 0..field.value().graphemes(true).count() {
+      let _ = field.on_key(press(KeyCode::Right));
+    }
+
+    assert!(field.on_key(press_mod(KeyCode::Left, KeyModifiers::CONTROL)));
+    assert_eq!(caret(field), Some((11, 1)), "start of \"three\"");
+
+    assert!(field.on_key(press_mod(KeyCode::Left, KeyModifiers::CONTROL)));
+    assert_eq!(caret(field), Some((7, 1)), "start of \"two\"");
+  }
+
+  #[test]
+  fn ctrl_backspace_deletes_the_word_behind_the_cursor() {
+    let field = Input::with("one two");
+    for _ in 0..7 {
+      let _ = field.on_key(press(KeyCode::Right));
+    }
+
+    assert!(field.on_key(press_mod(KeyCode::Backspace, KeyModifiers::CONTROL)));
+    assert_eq!(field.value(), "one ", "\"two\" is gone, the space before it is not");
+  }
+
+  #[test]
+  fn ctrl_delete_deletes_the_word_ahead_of_the_cursor() {
+    let field = Input::with("one two");
+    assert!(field.on_key(press_mod(KeyCode::Delete, KeyModifiers::CONTROL)));
+    assert_eq!(field.value(), " two", "\"one\" is gone");
+  }
+
+  #[test]
+  fn shift_right_selects_and_typing_replaces_the_selection() {
+    let field = Input::with("cat");
+    let _ = field.on_key(press_mod(KeyCode::Right, KeyModifiers::SHIFT));
+    let _ = field.on_key(press_mod(KeyCode::Right, KeyModifiers::SHIFT));
+    assert_eq!(reversed_columns(field), vec![0, 1], "\"ca\" is selected");
+
+    let _ = field.on_key(press(KeyCode::Char('o')));
+    assert_eq!(field.value(), "ot", "the selection is replaced, not kept around it");
+    assert_eq!(reversed_columns(field), Vec::<u16>::new(), "and the selection is gone");
+  }
+
+  #[test]
+  fn backspace_deletes_a_live_selection_instead_of_one_grapheme() {
+    let field = Input::with("hello");
+    for _ in 0..3 {
+      let _ = field.on_key(press_mod(KeyCode::Right, KeyModifiers::SHIFT));
+    }
+
+    assert!(field.on_key(press(KeyCode::Backspace)));
+    assert_eq!(field.value(), "lo", "the whole selection went, not just \"l\"");
+  }
+
+  #[test]
+  fn ctrl_shift_right_selects_a_whole_word() {
+    let field = Input::with("one two three");
+    let _ = field.on_key(press_mod(
+      KeyCode::Right,
+      KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+    ));
+
+    assert_eq!(reversed_columns(field), vec![0, 1, 2], "\"one\" is selected");
+    assert!(field.on_key(press(KeyCode::Backspace)));
+    assert_eq!(field.value(), " two three");
+  }
+
+  /// A plain arrow collapses a selection to its edge instead of moving one further past it —
+  /// the first press lands on the edge, the way it does in most editors.
+  #[test]
+  fn a_plain_arrow_collapses_the_selection_instead_of_moving_past_it() {
+    let field = Input::with("hello");
+    for _ in 0..3 {
+      let _ = field.on_key(press_mod(KeyCode::Right, KeyModifiers::SHIFT));
+    }
+
+    assert!(field.on_key(press(KeyCode::Left)));
+    assert_eq!(caret(field), Some((3, 1)), "back to the start of the selection");
+    assert_eq!(reversed_columns(field), Vec::<u16>::new());
   }
 }
