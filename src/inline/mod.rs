@@ -8,6 +8,7 @@
 mod components;
 pub mod log;
 
+pub use components::autocomplete::{Autocomplete, autocomplete};
 pub use components::confirm::{Confirm, confirm};
 pub use components::group_multiselect::{GroupMultiSelect, group_multiselect};
 pub use components::input::{Text, input};

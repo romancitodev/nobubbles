@@ -18,6 +18,7 @@ pub struct MultiSelect<'a> {
   /// Asides, by option index.
   notes: Vec<(usize, Cow<'static, str>)>,
   max_rows: Option<u16>,
+  filterable: bool,
   check: Option<Validator<'a>>,
 }
 
@@ -28,6 +29,7 @@ pub fn multiselect(prompt: impl Into<Block>) -> MultiSelect<'static> {
     options: Vec::new(),
     notes: Vec::new(),
     max_rows: None,
+    filterable: false,
     check: None,
   }
 }
@@ -58,6 +60,15 @@ impl<'a> MultiSelect<'a> {
     }
   }
 
+  /// Turns on `/` to search: typing narrows the list to what fuzzy-matches.
+  #[must_use]
+  pub fn filter(self) -> Self {
+    Self {
+      filterable: true,
+      ..self
+    }
+  }
+
   /// Refuses the pick with a reason instead of submitting it. Sees the ticked labels joined
   /// by commas, or `none`.
   #[must_use]
@@ -76,6 +87,9 @@ impl<'a> MultiSelect<'a> {
     let mut list = Widget::new(self.options);
     if let Some(rows) = self.max_rows {
       list = list.max_rows(rows);
+    }
+    if self.filterable {
+      list = list.filter();
     }
     for (at, note) in self.notes {
       list = list.note(at, note);

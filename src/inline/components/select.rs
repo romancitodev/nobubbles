@@ -30,6 +30,7 @@ pub struct Select {
   initial: usize,
   max_rows: Option<u16>,
   skip: &'static str,
+  filterable: bool,
 }
 
 /// Opens a single-choice prompt.
@@ -41,6 +42,7 @@ pub fn select(prompt: impl Into<Block>) -> Select {
     initial: 0,
     max_rows: None,
     skip: "none",
+    filterable: false,
   }
 }
 
@@ -98,6 +100,15 @@ impl Select {
     }
   }
 
+  /// Turns on `/` to search: typing narrows the list to what fuzzy-matches.
+  #[must_use]
+  pub fn filter(self) -> Self {
+    Self {
+      filterable: true,
+      ..self
+    }
+  }
+
   /// Requires an answer: no skip row, and `ask` gives back a plain index.
   ///
   /// Call it last, after the rest of the configuration.
@@ -116,7 +127,14 @@ impl Select {
     let items = once(Cow::Borrowed(self.skip)).chain(self.options.iter().cloned());
     // The skip row is row zero here, so every aside moves down one with its option.
     let notes = self.notes.iter().map(|(at, note)| (at + 1, note.clone()));
-    let picked = run(items, notes, self.initial + 1, self.max_rows, self.prompt)?;
+    let picked = run(
+      items,
+      notes,
+      self.initial + 1,
+      self.max_rows,
+      self.filterable,
+      self.prompt,
+    )?;
 
     Ok(picked.checked_sub(1))
   }
@@ -137,10 +155,11 @@ impl Strict {
       notes,
       initial,
       max_rows,
+      filterable,
       ..
     } = self.0;
 
-    run(options.into_iter(), notes, initial, max_rows, prompt)
+    run(options.into_iter(), notes, initial, max_rows, filterable, prompt)
   }
 }
 
@@ -149,6 +168,7 @@ fn run(
   notes: impl IntoIterator<Item = (usize, Cow<'static, str>)>,
   initial: usize,
   max_rows: Option<u16>,
+  filterable: bool,
   prompt: Block,
 ) -> Result<usize> {
   let mut list = Widget::new(items);
@@ -158,7 +178,10 @@ fn run(
   for (at, note) in notes {
     list = list.note(at, note);
   }
-  let list = list.initial(initial);
+  let mut list = list.initial(initial);
+  if filterable {
+    list = list.filter();
+  }
 
   ask(prompt, list, |key| list.on_key(key), &always_ok)?;
   Ok(list.selected())

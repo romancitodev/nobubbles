@@ -27,6 +27,7 @@ pub struct GroupMultiSelect<'a> {
   rows: Vec<Cow<'static, str>>,
   headings: Vec<usize>,
   max_rows: Option<u16>,
+  filterable: bool,
   check: Option<Validator<'a>>,
 }
 
@@ -37,6 +38,7 @@ pub fn group_multiselect(prompt: impl Into<Block>) -> GroupMultiSelect<'static> 
     rows: Vec::new(),
     headings: Vec::new(),
     max_rows: None,
+    filterable: false,
     check: None,
   }
 }
@@ -64,6 +66,16 @@ impl<'a> GroupMultiSelect<'a> {
     }
   }
 
+  /// Turns on `/` to search: typing narrows the list to what fuzzy-matches, keeping headings
+  /// whose group still has a match.
+  #[must_use]
+  pub fn filter(self) -> Self {
+    Self {
+      filterable: true,
+      ..self
+    }
+  }
+
   /// Refuses the pick with a reason instead of submitting it. Sees the ticked labels joined
   /// by commas, or `none`.
   #[must_use]
@@ -83,7 +95,10 @@ impl<'a> GroupMultiSelect<'a> {
     if let Some(rows) = self.max_rows {
       list = list.max_rows(rows);
     }
-    let list = list.headers(self.headings);
+    let mut list = list.headers(self.headings);
+    if self.filterable {
+      list = list.filter();
+    }
 
     let check: Check<'_> = self.check.as_deref().unwrap_or(&always_ok);
     ask(self.prompt, list, |key| list.on_key(key), check)?;

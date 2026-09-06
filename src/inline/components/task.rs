@@ -11,7 +11,7 @@ use crate::{
   },
   effects::{self, Emitter},
   signals::{self, quit},
-  style::Style,
+  style::{Style, palette},
 };
 
 /// A running task's voice. Whatever it says lands on the spinner's line.
@@ -67,7 +67,8 @@ pub fn task<T: Send + 'static>(
       cx.render(Prompt::new(PromptState::Active, title.clone(), spinner));
     } else {
       let last = Text::new(spinner.label()).style(Style::new().dim());
-      cx.render(Prompt::new(PromptState::Submitted, title.clone(), last));
+      let title = title.clone().settled(palette::OVERLAY1);
+      cx.render(Prompt::new(PromptState::Submitted, title, last));
       quit();
     }
   })?;

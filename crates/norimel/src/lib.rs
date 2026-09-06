@@ -137,6 +137,15 @@ enum Drift {
   Pulse,
 }
 
+/// Which half of a run's style a ramp paints.
+#[cfg(feature = "gradient")]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum Channel {
+  #[default]
+  Fg,
+  Bg,
+}
+
 /// A colour ramp, for [`Block::gradient`] and [`Block::animate`].
 ///
 /// A thin wrapper over a [`colorgrad`] gradient, so anything that crate can build works here:
@@ -318,10 +327,10 @@ pub struct Block {
   border: Option<(Border, Style)>,
   /// Set by hand for an effect this crate knows nothing about, so it still gets its frames.
   restless: bool,
-  /// The ramp, how many turns per second it moves, and how it is laid over the block. A
-  /// speed of zero is a still gradient.
+  /// The ramp, how many turns per second it moves, how it is laid over the block, and which
+  /// channel it paints. A speed of zero is a still gradient.
   #[cfg(feature = "gradient")]
-  gradient: Option<(Ramp, f32, Drift)>,
+  gradient: Option<(Ramp, f32, Drift, Channel)>,
 }
 
 /// Two blocks are equal when they compose to the same thing.
@@ -436,7 +445,7 @@ impl Block {
   #[cfg(feature = "gradient")]
   #[must_use]
   pub fn gradient(mut self, ramp: Ramp) -> Self {
-    self.gradient = Some((ramp, 0.0, Drift::Sweep));
+    self.gradient = Some((ramp, 0.0, Drift::Sweep, Channel::Fg));
     self
   }
 
@@ -456,7 +465,7 @@ impl Block {
   #[cfg(feature = "gradient")]
   #[must_use]
   pub fn animate(mut self, ramp: Ramp, speed: f32) -> Self {
-    self.gradient = Some((ramp, speed, Drift::Sweep));
+    self.gradient = Some((ramp, speed, Drift::Sweep, Channel::Fg));
     self
   }
 
@@ -480,7 +489,25 @@ impl Block {
   #[cfg(feature = "gradient")]
   #[must_use]
   pub fn pulse(mut self, ramp: Ramp, speed: f32) -> Self {
-    self.gradient = Some((ramp, speed, Drift::Pulse));
+    self.gradient = Some((ramp, speed, Drift::Pulse, Channel::Fg));
+    self
+  }
+
+  /// Paints the background instead of the foreground. Follows [`Block::gradient`],
+  /// [`Block::animate`] or [`Block::pulse`] — flips whichever ramp is already set.
+  ///
+  /// ```
+  /// use norimel::{self as rimel, Ramp};
+  ///
+  /// let banner = rimel::text("  release notes  ").gradient(Ramp::pastel()).on_bg();
+  /// assert_eq!(banner.size(), (17, 1));
+  /// ```
+  #[cfg(feature = "gradient")]
+  #[must_use]
+  pub fn on_bg(mut self) -> Self {
+    if let Some((_, _, _, channel)) = &mut self.gradient {
+      *channel = Channel::Bg;
+    }
     self
   }
 
@@ -596,7 +623,7 @@ impl Block {
   pub fn is_animated(&self) -> bool {
     #[cfg(feature = "gradient")]
     {
-      self.restless || matches!(self.gradient, Some((_, speed, _)) if speed != 0.0)
+      self.restless || matches!(self.gradient, Some((_, speed, _, _)) if speed != 0.0)
     }
     #[cfg(not(feature = "gradient"))]
     {
@@ -612,6 +639,32 @@ impl Block {
   pub fn animated(mut self) -> Self {
     self.restless = true;
     self
+  }
+
+  /// Freezes an animated block to a single, still colour. A block that was never animated
+  /// comes back untouched.
+  ///
+  /// The counterpart to [`Block::animate`]/[`Block::pulse`]/[`Block::animated`] for the
+  /// moment the movement should stop — an answered prompt, a finished task — where a title
+  /// left drifting would read as stuck rather than lively.
+  ///
+  /// ```
+  /// use norimel::{self as rimel, Color};
+  ///
+  /// let spinner = rimel::text("working").animated();
+  /// let done = spinner.settled(Color::DarkGray);
+  /// assert!(!done.is_animated());
+  /// ```
+  #[must_use]
+  pub fn settled(self, color: Color) -> Block {
+    if !self.is_animated() {
+      return self;
+    }
+    let mut block = self.map_cells(|_, _, style| style.fg(color));
+    // `map_cells` keeps `restless` on purpose, for a custom effect painting its own next
+    // frame. Here the point is the opposite: stop asking for frames, for good.
+    block.restless = false;
+    block
   }
 
   /// Recolours the block one cell at a time, after the shape is worked out.
@@ -709,21 +762,25 @@ impl Block {
     // the whole block and not each row, or a short row would run through the same colours in
     // fewer columns and the ramp would shear.
     #[cfg(feature = "gradient")]
-    if let Some((ramp, speed, drift)) = &self.gradient {
+    if let Some((ramp, speed, drift, channel)) = &self.gradient {
       let phase = if *speed == 0.0 { 0.0 } else { clock() * speed };
+      let paint = |style: Style, color: Color| match channel {
+        Channel::Fg => style.fg(color),
+        Channel::Bg => style.bg(color),
+      };
 
       match drift {
         Drift::Sweep => {
           let span = rows.iter().map(|row| row_width(row)).max().unwrap_or(1).max(1);
           for row in &mut rows {
-            *row = spread(row, ramp, phase, span);
+            *row = spread(row, ramp, phase, span, paint);
           }
         }
         Drift::Pulse => {
           let color = ramp.at(phase);
           for row in &mut rows {
             for run in row.iter_mut() {
-              run.style = run.style.fg(color);
+              run.style = paint(run.style, color);
             }
           }
         }
@@ -769,7 +826,7 @@ impl Block {
 
 /// One run per grapheme, each with its own point on the ramp.
 #[cfg(feature = "gradient")]
-fn spread(row: &[Run], ramp: &Ramp, phase: f32, span: u16) -> Vec<Run> {
+fn spread(row: &[Run], ramp: &Ramp, phase: f32, span: u16, paint: impl Fn(Style, Color) -> Style) -> Vec<Run> {
   let total = f32::from(span);
   let mut out = Vec::new();
   let mut at = 0u16;
@@ -777,7 +834,7 @@ fn spread(row: &[Run], ramp: &Ramp, phase: f32, span: u16) -> Vec<Run> {
   for run in row {
     for grapheme in run.text.graphemes(true) {
       let color = ramp.at(f32::from(at) / total + phase);
-      out.push(Run::new(grapheme, run.style.fg(color)));
+      out.push(Run::new(grapheme, paint(run.style, color)));
       at = at.saturating_add(width_of(grapheme));
     }
   }
@@ -1090,6 +1147,19 @@ mod tests {
     assert!(colors[0] != colors[1]);
   }
 
+  /// `on_bg` flips the ramp onto the background and leaves the foreground alone.
+  #[cfg(feature = "gradient")]
+  #[test]
+  fn on_bg_paints_the_background_instead() {
+    let block = text("ab").gradient(Ramp::rainbow()).on_bg();
+    let (fg, bg): (Vec<Color>, Vec<Color>) =
+      block.runs().map(|(.., style)| (style.fg, style.bg)).unzip();
+
+    assert!(fg.iter().all(|&c| c == Color::Reset), "foreground untouched");
+    assert!(bg[0] != bg[1], "the ramp still walks the row");
+    assert_eq!(bg[0], Ramp::rainbow().at(0.0));
+  }
+
   /// Pastel is the same wheel washed out: no channel ever goes near black.
   #[cfg(feature = "gradient")]
   #[test]
@@ -1145,6 +1215,17 @@ ab").gradient(Ramp::rainbow());
     assert!(text("x").animated().is_animated());
     // And it survives the escape hatch, or a hand-rolled effect would stop getting frames.
     assert!(text("x").animated().map_cells(|_, _, s| s).is_animated());
+  }
+
+  /// `settled` is the one place that *does* want the escape hatch's `restless` to die: it is
+  /// how an effect gets turned off for good rather than just recoloured for one more frame.
+  #[test]
+  fn settled_stops_a_hand_rolled_effect_from_asking_for_more_frames() {
+    let frozen = text("x").animated().settled(Color::DarkGray);
+
+    assert!(!frozen.is_animated());
+    assert_eq!(frozen.runs().next().unwrap().3.fg, Color::DarkGray);
+    assert_eq!(text("x").settled(Color::DarkGray), text("x"), "nothing to freeze, nothing changes");
   }
 
   /// A pulse is the other axis: one colour for everything, taken from the ramp by time.

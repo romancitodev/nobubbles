@@ -20,6 +20,7 @@ edition = "2024"
 compio = { version = "0.17.0", features = ["macros"], optional = true }
 crossterm.workspace = true
 eyre = "0.6"
+fuzzy-matcher = "0.3.7"
 norimel = { path = "crates/norimel", features = ["ratatui"] }
 ratatui = { workspace = true, features = ["crossterm"] }
 tachyonfx = { version = "0.25.1", optional = true }

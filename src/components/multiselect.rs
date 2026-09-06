@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use fuzzy_matcher::skim::SkimMatcherV2;
 use ratatui::{
   text::{Line, Span},
   widgets::{Paragraph, Widget},
@@ -71,9 +72,17 @@ pub struct MultiSelect {
   /// One per option, empty where there is none. Only the row under the cursor shows its own.
   notes: Signal<Vec<Cow<'static, str>>>,
   cursor: Signal<usize>,
-  /// First row of the window into `options`. Only moves when the cursor would leave it.
+  /// First row of the window into the visible (filtered) rows. Only moves when the cursor
+  /// would leave it.
   offset: Signal<usize>,
   style: Signal<MultiSelectStyle>,
+  /// `/` opens this; empty means "not searching", not "searching for nothing".
+  query: Signal<String>,
+  searching: Signal<bool>,
+  /// Whether [`MultiSelect::filter`] was called. `/` only opens search when it was — off by
+  /// default, so an existing list of options that happens to include a literal `/` doesn't
+  /// suddenly grow a mode nobody asked for.
+  filterable: bool,
 }
 
 impl MultiSelect {
@@ -87,6 +96,20 @@ impl MultiSelect {
       cursor: signal(0),
       offset: signal(0),
       style: signal(MultiSelectStyle::default()),
+      query: signal(String::new()),
+      searching: signal(false),
+      filterable: false,
+    }
+  }
+
+  /// Turns on `/` to search: typing narrows the list to what fuzzy-matches, keeping headings
+  /// whose group still has a match. Arrows, space, and `ctrl+a` work the same as ever, over
+  /// whatever's left visible.
+  #[must_use]
+  pub fn filter(self) -> Self {
+    Self {
+      filterable: true,
+      ..self
     }
   }
 
@@ -127,15 +150,6 @@ impl MultiSelect {
     self
   }
 
-  /// The nearest heading at or above `at`, if the list has any.
-  fn heading_above(&self, at: usize) -> Option<usize> {
-    self.headers.with_ref(|headers| {
-      (0..=at)
-        .rev()
-        .find(|&row| headers.get(row).copied().unwrap_or(false))
-    })
-  }
-
   /// Whether row `at` is a heading. Out of range counts as one, so nothing lands there.
   fn is_header(&self, at: usize) -> bool {
     self
@@ -143,24 +157,96 @@ impl MultiSelect {
       .with_ref(|headers| headers.get(at).copied().unwrap_or(true))
   }
 
-  /// Walks the cursor by `by`, wrapping, until it lands on something tickable.
+  /// The absolute indices into `options` that pass the query, in their original order.
   ///
-  /// Bounded by the length: a list that is all headings would otherwise spin forever.
-  fn step(&self, by: usize) {
-    let len = self.options.with_ref(Vec::len);
-    if len == 0 {
+  /// Checked against a row's own text and its [`MultiSelect::note`], if it has one — a hint
+  /// is content too, and hiding a row because the query matched the aside instead of the
+  /// label would be strange. A heading is kept when at least one row under it still matches
+  /// — filtered to nothing, a group heading with no options under it says nothing. One
+  /// backward pass: a heading's fate depends on the rows *below* it, so walking from the end
+  /// means each row is visited once, `group_matches` carrying whether anything in the group
+  /// seen so far matched. Recomputed on every keystroke and every frame — cheap for the sizes
+  /// a prompt list actually reaches; cache inside `MultiSelect` if a list ever gets big enough
+  /// for that to matter.
+  fn matches(&self) -> Vec<usize> {
+    let query = self.query.get();
+    if query.is_empty() {
+      return (0..self.options.with_ref(Vec::len)).collect();
+    }
+
+    let matcher = SkimMatcherV2::default();
+    let notes = self.notes.get();
+    let mut group_matches = false;
+    let mut out: Vec<usize> = self.headers.with_ref(|headers| {
+      self.options.with_ref(|opts| {
+        (0..opts.len())
+          .rev()
+          .filter(|&at| {
+            if headers.get(at).copied().unwrap_or(false) {
+              std::mem::take(&mut group_matches)
+            } else {
+              let hit =
+                super::fuzzy_matches(&matcher, &query, &opts[at], notes.get(at).map_or("", |n| n));
+              group_matches |= hit;
+              hit
+            }
+          })
+          .collect()
+      })
+    });
+    out.reverse();
+    out
+  }
+
+  /// The visible, tickable positions among `matches`: headings excluded, so the cursor only
+  /// ever lands on something you can toggle. An iterator and not a `Vec` — every caller already
+  /// has `matches` allocated; this just filters it in place.
+  fn tickable<'a>(&'a self, matches: &'a [usize]) -> impl Iterator<Item = usize> + 'a {
+    matches.iter().copied().filter(|&at| !self.is_header(at))
+  }
+
+  /// Walks the cursor by `by` positions among the tickable rows, wrapping.
+  fn step(&self, by: i32) {
+    let matches = self.matches();
+    let tickable: Vec<usize> = self.tickable(&matches).collect();
+    if tickable.is_empty() {
       return;
     }
 
-    let mut at = self.cursor.get();
-    for _ in 0..len {
-      at = (at + by) % len;
-      if !self.is_header(at) {
-        self.cursor.set(at);
-        self.scroll_into_view();
-        return;
-      }
+    let at = tickable.iter().position(|&row| row == self.cursor.get());
+    let next = match at {
+      Some(pos) => (pos as i32 + by).rem_euclid(tickable.len() as i32) as usize,
+      None => 0,
+    };
+
+    self.cursor.set(tickable[next]);
+    self.scroll_into_view(&matches);
+  }
+
+  /// Ticks (or unticks) the row under the cursor. Space does this outright; while searching,
+  /// Enter does too — the query already narrowed things down to one, and submitting the whole
+  /// prompt on Enter would just kick you out to the next one instead of registering the pick.
+  fn toggle_cursor(&self) {
+    let at = self.cursor.get();
+    if !self.is_header(at) {
+      self.checked.update(|checked| {
+        if let Some(row) = checked.get_mut(at) {
+          *row = !*row;
+        }
+      });
     }
+  }
+
+  /// The cursor and the window both talk about a row that may no longer exist once the query
+  /// changes, so both get fixed up in one place right after it does.
+  fn after_filter_changed(&self) {
+    let matches = self.matches();
+    let tickable: Vec<usize> = self.tickable(&matches).collect();
+    if !tickable.contains(&self.cursor.get()) {
+      self.cursor.set(tickable.first().copied().unwrap_or(0));
+    }
+    self.offset.set(0);
+    self.scroll_into_view(&matches);
   }
 
   /// Shows at most `rows` options at a time, scrolling to keep the cursor in view.
@@ -175,14 +261,23 @@ impl MultiSelect {
   /// Moves the window the least it can to keep the cursor inside it.
   ///
   /// Called from `on_key` and never from `render`: writing a signal while drawing marks the
-  /// view dirty, and the loop would repaint forever.
-  fn scroll_into_view(&self) {
+  /// view dirty, and the loop would repaint forever. Takes `matches` rather than recomputing
+  /// it: every caller already has it in hand.
+  fn scroll_into_view(&self, matches: &[usize]) {
     let Some(rows) = self.style.get().max_rows.map(|rows| rows as usize) else {
       return;
     };
+    // A query that matches nothing (or a list with no rows to begin with) leaves nothing to
+    // scroll to, and the heading lookback below indexes into `matches` — empty would panic.
+    if matches.is_empty() {
+      return;
+    }
 
-    let len = self.options.with_ref(Vec::len);
-    let cursor = self.cursor.get();
+    let len = matches.len();
+    let cursor = matches
+      .iter()
+      .position(|&row| row == self.cursor.get())
+      .unwrap_or(0);
     let last_offset = len.saturating_sub(rows);
 
     self.offset.update(|offset| {
@@ -199,17 +294,19 @@ impl MultiSelect {
 
     // Then pull the window back up to the heading, whenever the group fits inside it. A
     // window full of options with no heading over them says nothing about what they are
-    // under, which is the whole reason the groups exist.
-    if let Some(head) = self.heading_above(cursor)
+    // under, which is the whole reason the groups exist. The heading is looked for among
+    // `matches`, same axis as `cursor` and `offset`.
+    let head = (0..=cursor).rev().find(|&pos| self.is_header(matches[pos]));
+    if let Some(head) = head
       && cursor - head < rows
     {
       self.offset.update(|offset| *offset = (*offset).min(head));
     }
   }
 
-  /// The rows currently on screen, as a range into `options`.
-  fn window(&self) -> std::ops::Range<usize> {
-    let len = self.options.with_ref(Vec::len);
+  /// The rows currently on screen, as a range into `matches`.
+  fn window(&self, matches: &[usize]) -> std::ops::Range<usize> {
+    let len = matches.len();
     let rows = self
       .style
       .get()
@@ -227,12 +324,15 @@ impl MultiSelect {
     self
   }
 
-  /// Arrows move the cursor, space ticks the row under it.
+  /// Arrows move the cursor, space ticks the row under it, `/` opens search.
   pub fn on_key(&self, key: KeyEvent) -> bool {
+    if self.searching.get() {
+      return self.on_key_searching(key);
+    }
+
     match key.code {
       KeyCode::Up => {
-        let len = self.options.with_ref(Vec::len);
-        self.step(len.saturating_sub(1));
+        self.step(-1);
         true
       }
       KeyCode::Down => {
@@ -240,18 +340,56 @@ impl MultiSelect {
         true
       }
       KeyCode::Char(' ') => {
-        let at = self.cursor.get();
-        if !self.is_header(at) {
-          self.checked.update(|checked| {
-            if let Some(row) = checked.get_mut(at) {
-              *row = !*row;
-            }
-          });
-        }
+        self.toggle_cursor();
         true
       }
       KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
         self.toggle_all();
+        true
+      }
+      KeyCode::Char('/') if self.filterable => {
+        self.searching.set(true);
+        true
+      }
+      _ => false,
+    }
+  }
+
+  /// `on_key`, while the search row is open. Typing narrows the list (space included, so a
+  /// multi-word query works) instead of doing anything else, and Enter ticks the highlighted
+  /// row rather than submitting the whole prompt — `ask` only reads a plain Enter as submit,
+  /// so consuming it here is what keeps a search-then-pick from bouncing you to the next
+  /// prompt.
+  fn on_key_searching(&self, key: KeyEvent) -> bool {
+    match key.code {
+      KeyCode::Up => {
+        self.step(-1);
+        true
+      }
+      KeyCode::Down => {
+        self.step(1);
+        true
+      }
+      KeyCode::Enter => {
+        self.toggle_cursor();
+        true
+      }
+      KeyCode::Esc => {
+        self.searching.set(false);
+        self.query.set(String::new());
+        self.after_filter_changed();
+        true
+      }
+      KeyCode::Backspace => {
+        self.query.update(|query| {
+          query.pop();
+        });
+        self.after_filter_changed();
+        true
+      }
+      KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+        self.query.update(|query| query.push(c));
+        self.after_filter_changed();
         true
       }
       _ => false,
@@ -367,32 +505,48 @@ impl crate::components::Ask for MultiSelect {
   }
 
   fn controls(&self) -> &'static str {
-    "↑↓ to move · space to toggle · ctrl+a for all · enter to submit"
+    match (self.searching.get(), self.filterable) {
+      (true, _) => "type to filter · ↑↓ to move · esc to clear · enter to submit",
+      (false, true) => "↑↓ to move · space to toggle · ctrl+a for all · enter to submit · / to search",
+      (false, false) => "↑↓ to move · space to toggle · ctrl+a for all · enter to submit",
+    }
   }
 }
 
 impl Render for MultiSelect {
   fn height(&self, _: u16) -> u16 {
-    self.window().len() as u16
+    let matches = self.matches();
+    let body = if matches.is_empty() { 1 } else { self.window(&matches).len() };
+    (body + usize::from(self.searching.get())) as u16
   }
 
   fn render(self, area: super::Rect, buf: &mut super::Buffer<'_>) {
     let cursor = self.cursor.get();
     let style = self.style.get();
     let checked = self.checked.get();
-    let window = self.window();
-
+    let matches = self.matches();
+    let window = self.window(&matches);
     let notes = self.notes.get();
 
-    let lines: Vec<Line> = self.options.with_ref(|options| {
-      options
-        .iter()
-        .enumerate()
-        .skip(window.start)
-        .take(window.len())
-        .map(|(i, option)| {
+    let mut lines: Vec<Line> = Vec::new();
+    if self.searching.get() {
+      lines.push(super::render_search_row(&self.query.get(), area, buf));
+    }
+
+    if matches.is_empty() {
+      let message = if self.searching.get() { "no matches" } else { "no options" };
+      lines.push(Line::styled(
+        message,
+        Style::new().fg(palette::OVERLAY0).italic(),
+      ));
+    } else {
+      self.options.with_ref(|options| {
+        for &i in &matches[window.clone()] {
+          let option = &options[i];
+
           if self.is_header(i) {
-            return Line::styled(option.to_string(), style.header);
+            lines.push(Line::styled(option.to_string(), style.header));
+            continue;
           }
 
           let ticked = checked.get(i).copied().unwrap_or(false);
@@ -421,10 +575,10 @@ impl Render for MultiSelect {
           {
             spans.push(Span::styled(format!(" {note}"), style.note));
           }
-          Line::from(spans)
-        })
-        .collect()
-    });
+          lines.push(Line::from(spans));
+        }
+      });
+    }
 
     Widget::render(Paragraph::new(lines), area.into(), buf.inner_mut());
   }
@@ -436,6 +590,59 @@ mod tests {
 
   fn press(code: KeyCode) -> KeyEvent {
     KeyEvent::from(code)
+  }
+
+  /// The rows actually on screen, markers included.
+  fn wide(list: MultiSelect, rows: u16, width: u16) -> Vec<String> {
+    use ratatui::backend::TestBackend;
+
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, rows)).unwrap();
+    terminal
+      .draw(|frame| {
+        let area = frame.area().into();
+        let mut buf = crate::components::Buffer::from(frame.buffer_mut());
+        list.render(area, &mut buf);
+      })
+      .unwrap();
+
+    let buffer = terminal.backend().buffer().clone();
+    (0..rows)
+      .map(|y| {
+        (0..width)
+          .map(|x| buffer[(x, y)].symbol().to_owned())
+          .collect::<String>()
+          .trim_end()
+          .to_owned()
+      })
+      .collect()
+  }
+
+  /// An empty list is a library-level state, not a bug for the app to guard against —
+  /// `MultiSelect` says so itself instead of rendering nothing.
+  #[test]
+  fn an_empty_list_shows_a_placeholder_instead_of_rendering_nothing() {
+    let list = MultiSelect::new(Vec::<String>::new()).max_rows(3);
+    assert_eq!(list.height(20), 1);
+    assert_eq!(wide(list, 1, 20), ["no options"]);
+  }
+
+  /// The exact crash this guards: a query matching nothing, with `max_rows` set, used to
+  /// index `matches[0]` on an empty slice while pulling the window back up to a heading.
+  #[test]
+  fn a_query_matching_nothing_does_not_panic_the_scroll_math() {
+    let list = MultiSelect::new(["bun", "deno"]).max_rows(1).filter();
+    list.on_key(press(KeyCode::Char('/')));
+    list.on_key(press(KeyCode::Char('z')));
+
+    assert!(list.matches().is_empty());
+    assert_eq!(wide(list, 2, 20), ["/z", "no matches"]);
+  }
+
+  /// Search is opt-in: without `.filter()`, `/` is just a character nobody's listening for.
+  #[test]
+  fn slash_does_nothing_without_filter() {
+    let list = MultiSelect::new(["a/b", "c"]);
+    assert!(!list.on_key(press(KeyCode::Char('/'))));
   }
 
   /// Ctrl+A is a toggle, not a one-way switch, and it never touches a heading.
@@ -549,7 +756,7 @@ mod tests {
     let list = MultiSelect::new(rows).max_rows(6).headers([0, 3, 6]);
 
     assert!(
-      list.window().contains(&0),
+      list.window(&list.matches()).contains(&0),
       "Quality is in sight from the start"
     );
 
@@ -560,7 +767,7 @@ mod tests {
     }
     assert_eq!(list.cursor(), 4);
     assert!(
-      list.window().contains(&3),
+      list.window(&list.matches()).contains(&3),
       "Testing came along with its options"
     );
 
@@ -569,7 +776,7 @@ mod tests {
       list.on_key(press(KeyCode::Down));
     }
     assert_eq!(list.cursor(), 8);
-    assert!(list.window().contains(&6), "and so did Tooling");
+    assert!(list.window(&list.matches()).contains(&6), "and so did Tooling");
 
     // All the way back up to `eslint`, under Quality.
     for _ in 0..5 {
@@ -577,7 +784,7 @@ mod tests {
     }
     assert_eq!(list.cursor(), 1);
     assert!(
-      list.window().contains(&0),
+      list.window(&list.matches()).contains(&0),
       "Quality is back, not scrolled off"
     );
   }
@@ -597,7 +804,7 @@ mod tests {
       list.on_key(press(KeyCode::Down));
     }
     assert_eq!(
-      list.window(),
+      list.window(&list.matches()),
       2..5,
       "scrolled, keeping a row of context below"
     );
@@ -607,6 +814,97 @@ mod tests {
     list.on_key(press(KeyCode::Up));
     list.on_key(press(KeyCode::Up));
     assert_eq!(list.cursor(), 9, "wrapped off the top");
-    assert_eq!(list.window(), 7..10, "and the window went with it");
+    assert_eq!(list.window(&list.matches()), 7..10, "and the window went with it");
+  }
+
+  #[test]
+  fn slash_opens_search_and_the_cursor_lands_on_the_match() {
+    let list = MultiSelect::new(["bun", "deno", "node"]).filter();
+    assert!(list.on_key(press(KeyCode::Char('/'))));
+    for c in "den".chars() {
+      assert!(list.on_key(press(KeyCode::Char(c))));
+    }
+
+    assert_eq!(list.matches(), vec![1]);
+    assert_eq!(list.cursor(), 1);
+  }
+
+  /// A heading with nothing left under it says nothing, so it drops out with its group.
+  #[test]
+  fn a_header_survives_the_filter_only_if_a_child_still_matches() {
+    let list = MultiSelect::new(["Frontend", "react", "svelte", "Backend", "axum", "django"])
+      .headers([0, 3])
+      .filter();
+    list.on_key(press(KeyCode::Char('/')));
+    for c in "svel".chars() {
+      list.on_key(press(KeyCode::Char(c)));
+    }
+
+    assert_eq!(
+      list.matches(),
+      vec![0, 2],
+      "Frontend survives because svelte matches; Backend does not"
+    );
+    assert_eq!(list.cursor(), 2);
+  }
+
+  #[test]
+  fn arrows_skip_both_headers_and_non_matches_while_searching() {
+    let list = MultiSelect::new(["Frontend", "react", "redux", "Backend", "axum", "reqwest"])
+      .headers([0, 3])
+      .filter();
+    list.on_key(press(KeyCode::Char('/')));
+    list.on_key(press(KeyCode::Char('r')));
+    list.on_key(press(KeyCode::Char('e')));
+    assert_eq!(list.cursor(), 1, "lands on react");
+
+    list.on_key(press(KeyCode::Down));
+    assert_eq!(list.cursor(), 2, "redux");
+
+    list.on_key(press(KeyCode::Down));
+    assert_eq!(list.cursor(), 5, "reqwest, hopping over Backend and axum");
+
+    list.on_key(press(KeyCode::Down));
+    assert_eq!(list.cursor(), 1, "wraps back to react");
+  }
+
+  /// The fix for the bug where hitting Enter on a search result bounced you to the next
+  /// prompt instead of picking the thing you searched for.
+  #[test]
+  fn enter_ticks_the_highlighted_row_instead_of_submitting_while_searching() {
+    let list = MultiSelect::new(["bun", "deno", "node"]).filter();
+    list.on_key(press(KeyCode::Char('/')));
+    list.on_key(press(KeyCode::Char('d')));
+    list.on_key(press(KeyCode::Char('e')));
+
+    assert!(list.on_key(press(KeyCode::Enter)), "consumed, not left for ask");
+    assert_eq!(list.selected(), vec![1]);
+
+    // Enter is still left alone once search is closed, so submit works as normal.
+    list.on_key(press(KeyCode::Esc));
+    assert!(!list.on_key(press(KeyCode::Enter)));
+  }
+
+  #[test]
+  fn space_types_into_the_query_instead_of_toggling_while_searching() {
+    let list = MultiSelect::new(["bun", "deno"]).filter();
+    list.on_key(press(KeyCode::Char('/')));
+    assert!(list.on_key(press(KeyCode::Char(' '))));
+
+    assert_eq!(list.query.get(), " ");
+    assert_eq!(list.selected(), Vec::<usize>::new(), "nothing ticked");
+  }
+
+  #[test]
+  fn esc_clears_the_query_and_restores_the_full_list() {
+    let list = MultiSelect::new(["bun", "deno", "node"]).filter();
+    list.on_key(press(KeyCode::Char('/')));
+    for c in "den".chars() {
+      list.on_key(press(KeyCode::Char(c)));
+    }
+
+    assert!(list.on_key(press(KeyCode::Esc)));
+    assert_eq!(list.matches(), vec![0, 1, 2]);
+    assert_eq!(list.cursor(), 1, "cursor stays on deno");
   }
 }

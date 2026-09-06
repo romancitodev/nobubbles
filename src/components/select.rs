@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use fuzzy_matcher::skim::SkimMatcherV2;
 use ratatui::{
   text::{Line, Span},
   widgets::{Paragraph, Widget},
@@ -51,9 +52,17 @@ pub struct Select {
   /// One per option, empty where there is none. Only the row under the cursor shows its own.
   notes: Signal<Vec<Cow<'static, str>>>,
   selected: Signal<usize>,
-  /// First row of the window into `options`. Only moves when the cursor would leave it.
+  /// First row of the window into the visible (filtered) rows. Only moves when the cursor
+  /// would leave it.
   offset: Signal<usize>,
   style: Signal<SelectStyle>,
+  /// `/` opens this; empty means "not searching", not "searching for nothing".
+  query: Signal<String>,
+  searching: Signal<bool>,
+  /// Whether [`Select::filter`] was called. `/` only opens search when it was — off by
+  /// default, so an existing list of options that happens to include a literal `/` doesn't
+  /// suddenly grow a mode nobody asked for.
+  filterable: bool,
 }
 
 impl Select {
@@ -65,6 +74,19 @@ impl Select {
       selected: signal(0),
       offset: signal(0),
       style: signal(SelectStyle::default()),
+      query: signal(String::new()),
+      searching: signal(false),
+      filterable: false,
+    }
+  }
+
+  /// Turns on `/` to search: typing narrows the list to what fuzzy-matches, arrows and Enter
+  /// work the same as ever, over whatever's left visible.
+  #[must_use]
+  pub fn filter(self) -> Self {
+    Self {
+      filterable: true,
+      ..self
     }
   }
 
@@ -74,7 +96,7 @@ impl Select {
     let len = self.options.with_ref(Vec::len);
     if index < len {
       self.selected.set(index);
-      self.scroll_into_view();
+      self.scroll_into_view(&self.matches());
     }
     self
   }
@@ -119,38 +141,132 @@ impl Select {
   }
 
   pub fn on_key(&self, key: KeyEvent) -> bool {
+    if self.searching.get() {
+      return self.on_key_searching(key);
+    }
+
     match key.code {
       KeyCode::Up => {
-        let len = self.options.with_ref(Vec::len);
-        if len > 0 {
-          self.selected.update(|s| *s = (*s + len - 1) % len);
-          self.scroll_into_view();
-        }
+        self.move_cursor(-1);
         true
       }
       KeyCode::Down => {
-        let len = self.options.with_ref(Vec::len);
-        if len > 0 {
-          self.selected.update(|s| *s = (*s + 1) % len);
-          self.scroll_into_view();
-        }
+        self.move_cursor(1);
+        true
+      }
+      KeyCode::Char('/') if self.filterable => {
+        self.searching.set(true);
         true
       }
       _ => false,
     }
   }
 
+  /// `on_key`, while the search row is open. Typing narrows the list instead of doing
+  /// anything else, so the usual navigation keys stay the same but nothing else does.
+  fn on_key_searching(&self, key: KeyEvent) -> bool {
+    match key.code {
+      KeyCode::Up => {
+        self.move_cursor(-1);
+        true
+      }
+      KeyCode::Down => {
+        self.move_cursor(1);
+        true
+      }
+      KeyCode::Esc => {
+        self.searching.set(false);
+        self.query.set(String::new());
+        self.after_filter_changed();
+        true
+      }
+      KeyCode::Backspace => {
+        self.query.update(|query| {
+          query.pop();
+        });
+        self.after_filter_changed();
+        true
+      }
+      KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+        self.query.update(|query| query.push(c));
+        self.after_filter_changed();
+        true
+      }
+      _ => false,
+    }
+  }
+
+  /// The absolute indices into `options` that pass the query, in their original order.
+  ///
+  /// Checked against the option's own text and its [`Select::note`], if it has one — a hint
+  /// is content too, and hiding an option because the query matched the aside instead of the
+  /// label would be strange. Filtering only, not re-ranking: a `Select` doesn't shuffle the
+  /// list the way a bare fzf prompt does, it just hides what doesn't match. Recomputed on
+  /// every keystroke and every frame — cheap for the sizes a prompt list actually reaches;
+  /// cache inside `Select` if a list ever gets big enough for that to matter.
+  fn matches(&self) -> Vec<usize> {
+    let query = self.query.get();
+    if query.is_empty() {
+      return (0..self.options.with_ref(Vec::len)).collect();
+    }
+
+    let matcher = SkimMatcherV2::default();
+    let notes = self.notes.get();
+    self.options.with_ref(|opts| {
+      opts
+        .iter()
+        .enumerate()
+        .filter(|(at, option)| {
+          super::fuzzy_matches(&matcher, &query, option, notes.get(*at).map_or("", |n| n))
+        })
+        .map(|(at, _)| at)
+        .collect()
+    })
+  }
+
+  /// Moves the cursor by `by` positions within the visible (filtered) rows, wrapping.
+  fn move_cursor(&self, by: i32) {
+    let matches = self.matches();
+    if matches.is_empty() {
+      return;
+    }
+
+    let at = matches
+      .iter()
+      .position(|&option| option == self.selected.get())
+      .unwrap_or(0);
+    let next = (at as i32 + by).rem_euclid(matches.len() as i32) as usize;
+
+    self.selected.set(matches[next]);
+    self.scroll_into_view(&matches);
+  }
+
+  /// The cursor and the window both talk about a row that may no longer exist once the query
+  /// changes, so both get fixed up in one place right after it does.
+  fn after_filter_changed(&self) {
+    let matches = self.matches();
+    if !matches.contains(&self.selected.get()) {
+      self.selected.set(matches.first().copied().unwrap_or(0));
+    }
+    self.offset.set(0);
+    self.scroll_into_view(&matches);
+  }
+
   /// Moves the window the least it can to keep the cursor inside it.
   ///
   /// Called from `on_key` and never from `render`: writing a signal while drawing marks the
-  /// view dirty, and the loop would repaint forever.
-  fn scroll_into_view(&self) {
+  /// view dirty, and the loop would repaint forever. Takes `matches` rather than recomputing
+  /// it: every caller already has it in hand.
+  fn scroll_into_view(&self, matches: &[usize]) {
     let Some(rows) = self.style.get().max_rows.map(|rows| rows as usize) else {
       return;
     };
 
-    let len = self.options.with_ref(Vec::len);
-    let cursor = self.selected.get();
+    let len = matches.len();
+    let cursor = matches
+      .iter()
+      .position(|&option| option == self.selected.get())
+      .unwrap_or(0);
     let last_offset = len.saturating_sub(rows);
 
     self.offset.update(|offset| {
@@ -168,9 +284,9 @@ impl Select {
     });
   }
 
-  /// The rows currently on screen, as a range into `options`.
-  fn window(&self) -> std::ops::Range<usize> {
-    let len = self.options.with_ref(Vec::len);
+  /// The rows currently on screen, as a range into `matches`.
+  fn window(&self, matches: &[usize]) -> std::ops::Range<usize> {
+    let len = matches.len();
     let rows = self
       .style
       .get()
@@ -179,6 +295,17 @@ impl Select {
 
     let offset = self.offset.get().min(len.saturating_sub(rows));
     offset..offset + rows
+  }
+
+  /// Rows the body takes, not counting the search line itself: the option window, or one row
+  /// saying there's nothing to show — the query matched nothing, or the list was empty to
+  /// start with.
+  fn body_rows(&self, matches: &[usize]) -> usize {
+    if matches.is_empty() {
+      1
+    } else {
+      self.window(matches).len()
+    }
   }
 
   pub fn selected(&self) -> usize {
@@ -197,29 +324,43 @@ impl crate::components::Ask for Select {
   }
 
   fn controls(&self) -> &'static str {
-    "↑↓ to move · enter to submit"
+    match (self.searching.get(), self.filterable) {
+      (true, _) => "type to filter · ↑↓ to move · esc to clear · enter to submit",
+      (false, true) => "↑↓ to move · enter to submit · / to search",
+      (false, false) => "↑↓ to move · enter to submit",
+    }
   }
 }
 
 impl Render for Select {
   fn height(&self, _: u16) -> u16 {
-    self.window().len() as u16
+    let matches = self.matches();
+    (self.body_rows(&matches) + usize::from(self.searching.get())) as u16
   }
 
   fn render(self, area: super::Rect, buf: &mut super::Buffer<'_>) {
     let selected = self.selected.get();
     let style = self.style.get();
-    let window = self.window();
+    let matches = self.matches();
+    let window = self.window(&matches);
     let notes = self.notes.get();
 
-    let lines: Vec<Line> = self.options.with_ref(|opts| {
-      opts
-        .iter()
-        .enumerate()
-        .skip(window.start)
-        .take(window.len())
-        .map(|(i, option)| {
-          if i == selected {
+    let mut lines: Vec<Line> = Vec::new();
+    if self.searching.get() {
+      lines.push(super::render_search_row(&self.query.get(), area, buf));
+    }
+
+    if matches.is_empty() {
+      let message = if self.searching.get() { "no matches" } else { "no options" };
+      lines.push(Line::styled(
+        message,
+        Style::new().fg(palette::OVERLAY0).italic(),
+      ));
+    } else {
+      self.options.with_ref(|opts| {
+        for &i in &matches[window.clone()] {
+          let option = &opts[i];
+          lines.push(if i == selected {
             let mut spans = vec![
               Span::styled(style.active_symbol, style.active),
               Span::raw(format!(" {option}")),
@@ -233,10 +374,11 @@ impl Render for Select {
               format!("{} {option}", style.inactive_symbol),
               style.inactive,
             )
-          }
-        })
-        .collect()
-    });
+          });
+        }
+      });
+    }
+
     Widget::render(Paragraph::new(lines), area.into(), buf.inner_mut());
   }
 }
@@ -281,6 +423,22 @@ mod tests {
 
   fn digits(count: usize) -> Select {
     Select::new((0..count).map(|n| n.to_string())).max_rows(3)
+  }
+
+  /// An empty list is a library-level state, not a bug for the app to guard against —
+  /// `Select` says so itself instead of rendering nothing.
+  #[test]
+  fn an_empty_list_shows_a_placeholder_instead_of_rendering_nothing() {
+    let list = Select::new(Vec::<String>::new().into_iter()).max_rows(3);
+    assert_eq!(list.height(20), 1);
+    assert_eq!(wide(list, 1, 20), ["no options"]);
+  }
+
+  /// Search is opt-in: without `.filter()`, `/` is just a character nobody's listening for.
+  #[test]
+  fn slash_does_nothing_without_filter() {
+    let list = Select::new(["a/b", "c"].into_iter());
+    assert!(!list.on_key(press(KeyCode::Char('/'))));
   }
 
   /// The aside rides the cursor: it belongs to the row you are on, not to the row it is on.
@@ -351,6 +509,118 @@ mod tests {
       visible(list, 3),
       ["● 0", "○ 1", "○ 2"],
       "and back to the top"
+    );
+  }
+
+  /// The caret has to actually move, or a search row reads as a label instead of a field.
+  #[test]
+  fn the_caret_rides_the_end_of_the_query_while_searching() {
+    let list = Select::new(["bun", "deno"].into_iter()).filter();
+    list.on_key(press(KeyCode::Char('/')));
+    list.on_key(press(KeyCode::Char('d')));
+    list.on_key(press(KeyCode::Char('e')));
+
+    let mut raw = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 20, 3));
+    let mut buf = Buffer::from(&mut raw);
+    list.render(ratatui::layout::Rect::new(0, 0, 20, 3).into(), &mut buf);
+
+    assert_eq!(buf.cursor(), Some((3, 0)), "past \"/de\"");
+  }
+
+  #[test]
+  fn slash_opens_search_and_typing_narrows_the_list() {
+    let list = Select::new(["bun", "deno", "node"].into_iter()).filter();
+    assert!(list.on_key(press(KeyCode::Char('/'))));
+
+    for c in "den".chars() {
+      assert!(list.on_key(press(KeyCode::Char(c))));
+    }
+
+    assert_eq!(wide(list, 2, 20), ["/den", "● deno"]);
+    assert_eq!(list.value().as_deref(), Some("deno"));
+  }
+
+  /// A query can hit the note instead of the label — a hint is content too.
+  #[test]
+  fn a_query_can_match_the_note_instead_of_the_label() {
+    let list = Select::new(["bun", "pnpm", "npm"].into_iter())
+      .note(0, "(recommended)")
+      .filter();
+    list.on_key(press(KeyCode::Char('/')));
+    for c in "recom".chars() {
+      list.on_key(press(KeyCode::Char(c)));
+    }
+
+    assert_eq!(list.matches(), vec![0], "bun matched through its note");
+  }
+
+  #[test]
+  fn a_query_with_no_matches_shows_a_placeholder_row() {
+    let list = Select::new(["bun", "deno", "node"].into_iter()).filter();
+    list.on_key(press(KeyCode::Char('/')));
+    list.on_key(press(KeyCode::Char('z')));
+
+    assert_eq!(list.height(20), 2);
+    assert_eq!(wide(list, 2, 20), ["/z", "no matches"]);
+  }
+
+  #[test]
+  fn esc_clears_the_query_and_restores_the_full_list() {
+    let list = Select::new(["bun", "deno", "node"].into_iter()).filter();
+    list.on_key(press(KeyCode::Char('/')));
+    for c in "den".chars() {
+      list.on_key(press(KeyCode::Char(c)));
+    }
+
+    assert!(list.on_key(press(KeyCode::Esc)));
+    assert_eq!(
+      wide(list, 3, 20),
+      ["○ bun", "● deno", "○ node"],
+      "back to the full list, cursor still on deno"
+    );
+  }
+
+  /// `ask` reads an Enter the widget didn't want as "submit" (D-015/D-020) — search must not
+  /// swallow it, or there would be no way to accept the highlighted match.
+  #[test]
+  fn enter_is_left_for_the_caller_even_while_searching() {
+    let list = Select::new(["bun", "deno"].into_iter()).filter();
+    list.on_key(press(KeyCode::Char('/')));
+    assert!(!list.on_key(press(KeyCode::Enter)));
+  }
+
+  /// The cursor only ever lands on a visible row: hidden matches are skipped, not counted.
+  #[test]
+  fn arrows_move_between_matches_only_and_wrap() {
+    let list = Select::new(["aaa", "bbb", "aab", "ccc"].into_iter()).filter();
+    list.on_key(press(KeyCode::Char('/')));
+    list.on_key(press(KeyCode::Char('a')));
+    list.on_key(press(KeyCode::Char('a')));
+    assert_eq!(wide(list, 3, 20), ["/aa", "● aaa", "○ aab"]);
+
+    assert!(list.on_key(press(KeyCode::Down)));
+    assert_eq!(list.selected(), 2, "bbb is hidden, so it is skipped");
+
+    assert!(list.on_key(press(KeyCode::Down)));
+    assert_eq!(list.selected(), 0, "wraps back to the first match");
+  }
+
+  #[test]
+  fn backspace_widens_the_filter_back_out() {
+    let list = Select::new(["bun", "deno", "node"].into_iter()).filter();
+    list.on_key(press(KeyCode::Char('/')));
+    for c in "den".chars() {
+      list.on_key(press(KeyCode::Char(c)));
+    }
+    assert_eq!(list.value().as_deref(), Some("deno"));
+
+    list.on_key(press(KeyCode::Backspace));
+    list.on_key(press(KeyCode::Backspace));
+    list.on_key(press(KeyCode::Backspace));
+    assert_eq!(
+      wide(list, 3, 20),
+      ["/", "○ bun", "● deno"],
+      "empty query is the full list again, cursor still on deno"
     );
   }
 }

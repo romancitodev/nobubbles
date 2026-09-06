@@ -9,9 +9,10 @@ use crate::{
   },
   rimel::Block,
   signals::{self, signal},
-  style::Style,
+  style::{Style, palette},
 };
 
+pub mod autocomplete;
 pub mod confirm;
 pub mod group_multiselect;
 pub mod input;
@@ -73,7 +74,8 @@ pub(crate) fn ask<W: Render + Ask + Copy>(
     // whole list would leave the transcript reading as options rather than as answers.
     if submitted.get() {
       let answer = Text::new(widget.answer()).style(Style::new().dim());
-      cx.render(Prompt::new(PromptState::Submitted, title.clone(), answer));
+      let title = title.clone().settled(palette::OVERLAY1);
+      cx.render(Prompt::new(PromptState::Submitted, title, answer));
     } else if let Some(why) = refused.get() {
       cx.render(Prompt::new(PromptState::Error, title.clone(), widget).hint(why));
     } else {

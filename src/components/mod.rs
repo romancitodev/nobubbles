@@ -1,3 +1,4 @@
+pub mod autocomplete;
 pub mod confirm;
 pub mod input;
 pub mod multiselect;
@@ -6,6 +7,11 @@ pub mod prompt;
 pub mod select;
 pub mod select_key;
 pub mod text;
+
+use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
+use ratatui::text::{Line, Span};
+
+use crate::style::{Style, palette};
 
 /// A rectangular area, wrapping ratatui's own. kept as a newtype so
 /// ratatui never appears in a public signature.
@@ -77,6 +83,31 @@ impl<'b> Buffer<'b> {
   pub(crate) fn cursor(&self) -> Option<(u16, u16)> {
     self.cursor
   }
+}
+
+/// Whether `query` fuzzy-matches `text` or `note` — the shared rule behind search in
+/// `Select`, `MultiSelect`, and `Autocomplete`: a hint is content too, and hiding a row
+/// because the query matched the aside instead of the label would be strange.
+pub(crate) fn fuzzy_matches(matcher: &SkimMatcherV2, query: &str, text: &str, note: &str) -> bool {
+  matcher.fuzzy_match(text, query).is_some()
+    || (!note.is_empty() && matcher.fuzzy_match(note, query).is_some())
+}
+
+/// Draws a `/query` search row and puts the terminal caret at its end. Shared between
+/// `Select` and `MultiSelect`, the only two with a query typed on a row of their own — an
+/// `Autocomplete`'s query is just its `Input`, which places its own caret.
+pub(crate) fn render_search_row(query: &str, area: Rect, buf: &mut Buffer<'_>) -> Line<'static> {
+  // "/" is one column; the rest is however wide the query prints.
+  let column = crate::rimel::width_of(query).saturating_add(1);
+  buf.set_cursor(
+    area.x() + column.min(area.width().saturating_sub(1)),
+    area.y(),
+  );
+
+  Line::from(vec![
+    Span::styled("/", Style::new().fg(palette::OVERLAY1)),
+    Span::raw(query.to_owned()),
+  ])
 }
 
 /// What a `Component::view()` returns.
