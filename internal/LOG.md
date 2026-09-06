@@ -56,7 +56,20 @@ que no se puede reconstruir leyendo el código.
 - `inline::log::block(&Block)` — imprime un bloque de rímel sobre el riel con `
 
 `.
-- Ejemplos nuevos: `styles`, `commit`, `download`, `fx`. README con las dos tablas.
+- Movimiento en rímel: `animate` (la rampa barre las columnas) y `pulse` (el bloque entero
+  toma un color y el tiempo lo camina). `Ramp::new` toma cualquier gradiente de colorgrad,
+  que ahora se re-exporta.
+- `Block::map_cells` + `Block::animated()`: el enganche para efectos de terceros. Te da cada
+  celda ya ubicada y le devolvés el estilo; `animated()` avisa que se mueve solo. Un efecto
+  propio no necesita tocar el crate.
+- `Block::is_animated()` y `rimel::keep_awake`: un bloque animado pide el cuadro siguiente
+  solo, desde `Render for Block` y desde `Prompt::render`.
+- Los títulos de prompt son `Block`, no `&str`, así que pueden llevar color. Todos los
+  builders de `inline::*` toman `impl Into<Block>`.
+- `ProgressStyle::label_width`: rellena el label para que una columna de barras arranque en
+  la misma posición.
+- Ejemplos nuevos: `styles`, `commit`, `download`, `fx`, `deep-thought`. README con las dos
+  tablas y la sección de efectos propios.
 
 **Aprendido:**
 - Un blanket sobre un trait ajeno reclama **todos** los tipos ajenos. Es lo que impide
@@ -68,6 +81,12 @@ que no se puede reconstruir leyendo el código.
   pide el cuadro siguiente.
 - tachyonfx 0.25.1 pide `ratatui ^0.30.2`, la misma que usamos. Se chequeó en el índice
   antes de escribir una línea.
+- El gradiente usaba el ancho de **cada fila**, así que en un bloque multilínea las filas
+  cortas recorrían la rampa entera en menos columnas y el arcoíris salía torcido. Ahora la
+  rampa abarca el bloque.
+- Una animación sin signals no se redibuja: un prompt en reposo no ensucia nada y el loop se
+  duerme en el idle. De ahí sale `is_animated` — el bloque avisa y el que lo dibuja pide el
+  cuadro.
 
 **Callejones sin salida:**
 - `examples/git.rs` compilaba a `target\debug\examples\git.exe`, y Windows resuelve un
@@ -89,6 +108,10 @@ que no se puede reconstruir leyendo el código.
 - `Block::runs()` compone en cada llamada, y `Render::height` la llama por cuadro. Barato
   hoy; si molesta, se cachea adentro de `Block`.
 - `group_multiselect` no tiene `note()`: los índices ahí incluyen los headings.
+- Un título animado repinta a 30fps mientras el prompt está abierto. Es opt-in por bloque,
+  pero si algún día molesta, el escalón es limitar el ritmo de lo animado, no del loop.
+- `map_cells` parte en grafemas: 40 columnas son 40 runs. Barato para un título, a mirar si
+  alguien lo corre sobre una pantalla entera.
 
 **Siguiente:**
 - El builder de prompts (`hint`, `initial`, `optional`), que sigue siendo el ítem que

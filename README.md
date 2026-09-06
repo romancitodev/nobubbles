@@ -37,6 +37,7 @@ fn main() -> eyre::Result<()> {
 ## Examples
 
 ```
+cargo run --example deep-thought --features gradient  # the whole crate in one sitting
 cargo run --example create              # every prompt in the crate, as a scaffolder
 cargo run --example styles              # one CLI, three looks
 cargo run --example commit              # runs git for real and waits for it
@@ -95,6 +96,18 @@ println!("{}", rimel::row([badge, rimel::text("  ready in 300ms")]));
 
 It prints ANSI through `Display` and paints cells through `Block::runs`, which is how the same
 value works in a `println!` and inside a live view.
+
+### Effects
+
+An animation is a function from a clock to a block; you rebuild it every frame. `animate`
+slides a colour ramp across the text, `pulse` gives the whole block one colour and walks that
+along the ramp instead. Bring your own ramp with `Ramp::new` — colorgrad is re-exported so you
+don't need it in your manifest.
+
+For a motion neither of those covers, `map_cells` hands you every cell once the shape is
+settled and takes back the style you want, and `animated()` tells the loop to keep the frames
+coming. That's a complete effect, in your crate, without patching this one. The animation
+section of the `norimel` docs walks through it.
 
 ## License
 
