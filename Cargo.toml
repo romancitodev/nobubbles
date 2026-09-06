@@ -37,6 +37,10 @@ fx = ["dep:tachyonfx"]
 gradient = ["norimel/gradient"]
 
 [[example]]
+name = "deep-thought"
+required-features = ["gradient"]
+
+[[example]]
 name = "download"
 required-features = ["gradient"]
 

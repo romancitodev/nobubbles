@@ -109,8 +109,15 @@ fn summary() -> impl Render {
 }
 
 fn main() -> Result<()> {
+  // Padded to the longest label there can ever be, so the bars don't shuffle sideways as the
+  // cores pick up crates with names of different lengths.
+  let widest = 10 + CRATES.iter().map(|name| name.len()).max().unwrap_or(0) as u16;
   let rows: Vec<Progress> = (0..CORES)
-    .map(|_| Progress::with("waiting").width(52))
+    .map(|_| {
+      Progress::with("waiting")
+        .label_width(widest)
+        .width(widest + 1 + 40)
+    })
     .collect();
   let queue: Queue = Arc::new(Mutex::new(CRATES.to_vec()));
   let inbox = effects::inbox::<Update>();

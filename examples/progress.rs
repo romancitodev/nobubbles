@@ -20,9 +20,14 @@ const CRATES: [&str; 8] = [
 
 fn main() -> Result<()> {
   let header = Progress::new();
+  let widest = 10 + CRATES.iter().map(|name| name.len()).max().unwrap_or(0) as u16;
   let jobs: Vec<Progress> = CRATES
     .iter()
-    .map(|name| Progress::with(format!("Compiling {name}")).width(48))
+    .map(|name| {
+      Progress::with(format!("Compiling {name}"))
+        .label_width(widest)
+        .width(widest + 1 + 36)
+    })
     .collect();
 
   Inline::run(30, |cx| {

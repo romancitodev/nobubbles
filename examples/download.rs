@@ -49,7 +49,7 @@ fn bar(ratio: f32) -> Block {
 
   rimel::row([
     rimel::text("█".repeat(usize::from(WIDTH)))
-      .animate(Ramp::rainbow(), 0.25)
+      .animate(Ramp::rainbow(), 0.6)
       .w(filled),
     rimel::text("░".repeat(usize::from(WIDTH - filled))).fg(palette::SURFACE1),
   ])
@@ -85,7 +85,7 @@ fn main() -> Result<()> {
 
     cx.render(rimel::col([
       rimel::text(format!("↓  {FILE}"))
-        .animate(Ramp::pastel(), 0.12)
+        .animate(Ramp::pastel(), 0.4)
         .bold(),
       rimel::row([
         bar(ratio),
