@@ -68,6 +68,7 @@ where
 
     if crate::signals::is_dirty() && last_render.elapsed() >= frame || key.is_some() || first_draw {
       let mut wanted_height = current_height;
+      let since = last_render.elapsed();
       // Cleared before `ui`, never after. What the closure writes while drawing is news for
       // the *next* frame, and clearing afterwards threw it away: a view that animates itself
       // went dirty, got wiped, and then sat idle forever because only `ui` can dirty it and
@@ -80,7 +81,7 @@ where
         // Nothing asking for the cursor means `draw` hides it, which is what a view with
         // nothing to type into wants.
         let cursor = {
-          let mut ctx = Ctx::new(frame, key);
+          let mut ctx = Ctx::new(frame, key, since);
           ui(&mut ctx);
           wanted_height = ctx.wanted_height();
           ctx.cursor()

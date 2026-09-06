@@ -15,10 +15,15 @@ pub struct Ctx<'a> {
   key: Option<KeyEvent>,
   wanted_height: u16,
   cursor: Option<(u16, u16)>,
+  since: Duration,
 }
 
 impl<'a> Ctx<'a> {
-  pub(crate) fn new(frame: &'a mut ratatui::Frame<'_>, key: Option<KeyEvent>) -> Self {
+  pub(crate) fn new(
+    frame: &'a mut ratatui::Frame<'_>,
+    key: Option<KeyEvent>,
+    since: Duration,
+  ) -> Self {
     let area: Rect = frame.area().into();
     Ctx {
       area,
@@ -26,6 +31,7 @@ impl<'a> Ctx<'a> {
       key,
       wanted_height: area.height(),
       cursor: None,
+      since,
     }
   }
 
@@ -44,6 +50,37 @@ impl<'a> Ctx<'a> {
   /// Returns the key event, if one is available.
   pub fn key(&self) -> Option<KeyEvent> {
     self.key
+  }
+
+  /// How long since the last frame.
+  pub fn since(&self) -> Duration {
+    self.since
+  }
+
+  /// Runs a [`tachyonfx`] effect over what has been rendered. Needs the `fx` feature.
+  ///
+  /// Call it after `render`: an effect is a pass over the cells that are already there, so
+  /// there has to be something there. It asks for the next frame on its own while it runs.
+  ///
+  /// ```no_run
+  /// # #[cfg(feature = "fx")] {
+  /// # use nobubbles::{app::Inline, components::text::Text};
+  /// use tachyonfx::{Duration, fx};
+  ///
+  /// let mut fade = fx::coalesce(Duration::from_millis(600));
+  /// Inline::run(30, move |cx| {
+  ///   cx.render(Text::new("nobubbles"));
+  ///   cx.effect(&mut fade);
+  /// })
+  /// # ; }
+  /// ```
+  #[cfg(feature = "fx")]
+  pub fn effect(&mut self, effect: &mut tachyonfx::Effect) {
+    effect.process(self.since.into(), self.buf, self.area.into());
+
+    if !effect.done() {
+      crate::signals::redraw();
+    }
   }
 
   /// Height the last `render()` call reported its view needing, in rows.

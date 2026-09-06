@@ -101,6 +101,14 @@ pub(crate) fn make_dirty() {
   RT.with(|ctx| ctx.dirty.set(true));
 }
 
+/// Asks the loop for another frame.
+///
+/// Writing a signal already does this, so state-driven views never call it. It is for the
+/// ones with no state to write: a gradient that drifts with the clock, an effect mid-fade.
+pub fn redraw() {
+  make_dirty();
+}
+
 /// It returns the value of the `dirty` flag of the `Runtime`.
 #[must_use]
 pub fn is_dirty() -> bool {
