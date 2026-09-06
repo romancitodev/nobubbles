@@ -6,11 +6,13 @@ use crate::{
   inline::components::{Check, Validator, always_ok, ask},
 };
 
-/// Asks for something secret. Dots on screen, dots in the transcript.
+/// Asks for something secret. A fixed-width mask on screen, dots in the transcript, so
+/// neither ever says how long the real value is.
 pub struct Password<'a> {
   prompt: Block,
   placeholder: Option<&'static str>,
   check: Option<Validator<'a>>,
+  invisible: bool,
 }
 
 /// Opens a masked text prompt.
@@ -19,6 +21,7 @@ pub fn password(prompt: impl Into<Block>) -> Password<'static> {
     prompt: prompt.into(),
     placeholder: None,
     check: None,
+    invisible: false,
   }
 }
 
@@ -28,6 +31,16 @@ impl<'a> Password<'a> {
   pub fn placeholder(self, text: &'static str) -> Self {
     Self {
       placeholder: Some(text),
+      ..self
+    }
+  }
+
+  /// Past the fixed mask: draws nothing at all while typing, for the rare case where even
+  /// "someone's typing something" shouldn't show.
+  #[must_use]
+  pub fn invisible(self) -> Self {
+    Self {
+      invisible: true,
       ..self
     }
   }
@@ -47,7 +60,11 @@ impl<'a> Password<'a> {
   /// # Errors
   /// Fails if the terminal can't be set up, or `Cancelled` if the user pressed Ctrl+C.
   pub fn ask(self) -> Result<String> {
-    let mut field = Input::new().masked();
+    let mut field = if self.invisible {
+      Input::new().invisible()
+    } else {
+      Input::new().masked()
+    };
     if let Some(placeholder) = self.placeholder {
       field = field.placeholder(placeholder);
     }

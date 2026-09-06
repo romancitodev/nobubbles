@@ -20,6 +20,8 @@ pub struct Input {
   anchor: Signal<Option<usize>>,
   multiline: Signal<bool>,
   masked: Signal<bool>,
+  /// Even more paranoid than `masked`: draws nothing at all, not even the fixed mask.
+  invisible: Signal<bool>,
   /// Shown, muted, only while the value is empty. Never part of the value — `&'static str`
   /// and not owned, since a hint is UI text set once at construction, not user data.
   placeholder: Option<&'static str>,
@@ -39,6 +41,7 @@ impl Input {
       anchor: signal(None),
       multiline: signal(false),
       masked: signal(false),
+      invisible: signal(false),
       placeholder: None,
     }
   }
@@ -53,22 +56,35 @@ impl Input {
     }
   }
 
-  /// Draws a dot per grapheme instead of the text, and answers with dots too, so a password
-  /// never reaches the screen or the transcript.
+  /// Draws a fixed-width mask instead of the text once there's anything typed, so a password
+  /// never reaches the screen or the transcript. Fixed-width and not one dot per grapheme:
+  /// matching the real length on screen is exactly the kind of leak masking is supposed to
+  /// prevent (shoulder-surfing, screen recordings). Empty stays empty, so a placeholder can
+  /// still show before anything's typed.
   #[must_use]
   pub fn masked(self) -> Self {
     self.masked.set(true);
     self
   }
 
-  /// A fixed-width mask, not one dot per grapheme: matching the real length on screen is
-  /// exactly the kind of leak masking is supposed to prevent (shoulder-surfing, screen
-  /// recordings). Empty stays empty, so the placeholder still shows before anything's typed.
+  /// Past even `masked`: draws nothing at all, ever, mask included. For values where the
+  /// fact that someone's typing something is itself worth hiding.
+  #[must_use]
+  pub fn invisible(self) -> Self {
+    self.masked.set(true);
+    self.invisible.set(true);
+    self
+  }
+
   const MASK_WIDTH: usize = 24;
 
-  /// What to draw: the value, or a mask that says nothing about how long it really is.
+  /// What to draw: the value, a mask that says nothing about how long it really is, or
+  /// nothing at all.
   fn shown(&self) -> String {
     let value = self.value.get();
+    if self.invisible.get() {
+      return String::new();
+    }
     if !self.masked.get() {
       return value;
     }
@@ -554,6 +570,21 @@ mod tests {
     let _ = field.on_key(press(KeyCode::Left));
     let _ = field.on_key(press(KeyCode::Backspace));
     assert_eq!(caret(field), None, "no caret through edits either");
+  }
+
+  #[test]
+  fn invisible_input_renders_nothing_but_still_holds_the_real_value() {
+    let field = Input::new().invisible();
+    assert_eq!(rendered_text(field, 20), "");
+    assert_eq!(caret(field), None);
+
+    for c in "a whole secret sentence".chars() {
+      let _ = field.on_key(press(KeyCode::Char(c)));
+    }
+
+    assert_eq!(rendered_text(field, 20), "", "not even a mask shows up");
+    assert_eq!(caret(field), None);
+    assert_eq!(field.value(), "a whole secret sentence", "the real value still submits");
   }
 
   #[test]
