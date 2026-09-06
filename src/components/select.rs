@@ -9,8 +9,13 @@ use ratatui::{
 use crate::{
   components::Render,
   signals::{Signal, signal},
-  style::{Color, Style},
+  style::{Style, palette},
 };
+
+/// Rows of context kept past the cursor, so the list scrolls *before* the cursor reaches the
+/// edge. Without it the cursor walks into the last visible row and the list only then jumps,
+/// which reads as the list moving on its own rather than as you moving through it.
+const MARGIN: usize = 1;
 
 /// The painted parts of a [`Select`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -21,6 +26,8 @@ pub struct SelectStyle {
   pub active: Style,
   /// Every other row, marker and label together.
   pub inactive: Style,
+  /// The aside on the row under the cursor.
+  pub note: Style,
   /// Most rows drawn at once. `None` draws the whole list, however long it is.
   pub max_rows: Option<u16>,
 }
@@ -30,8 +37,9 @@ impl Default for SelectStyle {
     Self {
       active_symbol: "●",
       inactive_symbol: "○",
-      active: Style::new().fg(Color::Green),
-      inactive: Style::new().dim(),
+      active: Style::new().fg(palette::GREEN),
+      inactive: Style::new().fg(palette::OVERLAY1),
+      note: Style::new().fg(palette::OVERLAY0).italic(),
       max_rows: None,
     }
   }
@@ -40,6 +48,8 @@ impl Default for SelectStyle {
 #[derive(Clone, Copy)]
 pub struct Select {
   options: Signal<Vec<Cow<'static, str>>>,
+  /// One per option, empty where there is none. Only the row under the cursor shows its own.
+  notes: Signal<Vec<Cow<'static, str>>>,
   selected: Signal<usize>,
   /// First row of the window into `options`. Only moves when the cursor would leave it.
   offset: Signal<usize>,
@@ -51,6 +61,7 @@ impl Select {
     let options: Vec<Cow<'_, str>> = options.map(Into::into).collect();
     Self {
       options: signal(options),
+      notes: signal(Vec::new()),
       selected: signal(0),
       offset: signal(0),
       style: signal(SelectStyle::default()),
@@ -77,6 +88,26 @@ impl Select {
     self
       .style
       .update(|style| style.max_rows = Some(rows.max(1)));
+    self
+  }
+
+  /// An aside for one option, shown only while the cursor is on it.
+  ///
+  /// ```text
+  /// ● bun (recommended)
+  /// ○ pnpm
+  /// ```
+  ///
+  /// Only on the active row: a column of asides is a second list to read, and the point of
+  /// the thing is to say something about the option you are looking at right now.
+  #[must_use]
+  pub fn note(self, at: usize, text: impl Into<Cow<'static, str>>) -> Self {
+    self.notes.update(|notes| {
+      if notes.len() <= at {
+        notes.resize(at + 1, Cow::Borrowed(""));
+      }
+      notes[at] = text.into();
+    });
     self
   }
 
@@ -123,12 +154,15 @@ impl Select {
     let last_offset = len.saturating_sub(rows);
 
     self.offset.update(|offset| {
-      if cursor < *offset {
+      // The margin is dropped rather than honoured when the window is too small to hold it.
+      let margin = MARGIN.min(rows.saturating_sub(1) / 2);
+
+      if cursor < offset.saturating_add(margin) {
         // Includes wrapping from the top: the cursor lands on the last row and the window
         // jumps down with it.
-        *offset = cursor;
-      } else if cursor >= *offset + rows {
-        *offset = cursor + 1 - rows;
+        *offset = cursor.saturating_sub(margin);
+      } else if cursor + margin >= *offset + rows {
+        *offset = (cursor + margin + 1).saturating_sub(rows);
       }
       *offset = (*offset).min(last_offset);
     });
@@ -176,6 +210,7 @@ impl Render for Select {
     let selected = self.selected.get();
     let style = self.style.get();
     let window = self.window();
+    let notes = self.notes.get();
 
     let lines: Vec<Line> = self.options.with_ref(|opts| {
       opts
@@ -185,10 +220,14 @@ impl Render for Select {
         .take(window.len())
         .map(|(i, option)| {
           if i == selected {
-            Line::from(vec![
+            let mut spans = vec![
               Span::styled(style.active_symbol, style.active),
               Span::raw(format!(" {option}")),
-            ])
+            ];
+            if let Some(note) = notes.get(i).filter(|note| !note.is_empty()) {
+              spans.push(Span::styled(format!(" {note}"), style.note));
+            }
+            Line::from(spans)
           } else {
             Line::styled(
               format!("{} {option}", style.inactive_symbol),
@@ -215,7 +254,11 @@ mod tests {
 
   /// The rows actually on screen, markers included.
   fn visible(list: Select, rows: u16) -> Vec<String> {
-    let mut terminal = ratatui::Terminal::new(TestBackend::new(12, rows)).unwrap();
+    wide(list, rows, 12)
+  }
+
+  fn wide(list: Select, rows: u16, width: u16) -> Vec<String> {
+    let mut terminal = ratatui::Terminal::new(TestBackend::new(width, rows)).unwrap();
     terminal
       .draw(|frame| {
         let area = frame.area().into();
@@ -227,7 +270,7 @@ mod tests {
     let buffer = terminal.backend().buffer().clone();
     (0..rows)
       .map(|y| {
-        (0..12)
+        (0..width)
           .map(|x| buffer[(x, y)].symbol().to_owned())
           .collect::<String>()
           .trim_end()
@@ -238,6 +281,20 @@ mod tests {
 
   fn digits(count: usize) -> Select {
     Select::new((0..count).map(|n| n.to_string())).max_rows(3)
+  }
+
+  /// The aside rides the cursor: it belongs to the row you are on, not to the row it is on.
+  #[test]
+  fn a_note_shows_only_while_the_cursor_is_on_its_option() {
+    let list = Select::new(["bun", "pnpm"].into_iter()).note(0, "(recommended)");
+
+    assert_eq!(
+      wide(list, 2, 20),
+      ["● bun (recommended)", "○ pnpm"]
+    );
+
+    list.on_key(press(KeyCode::Down));
+    assert_eq!(wide(list, 2, 20), ["○ bun", "● pnpm"]);
   }
 
   #[test]
@@ -251,24 +308,30 @@ mod tests {
     );
   }
 
+  /// The window keeps a row of context past the cursor, so the list moves before the cursor
+  /// reaches the edge. Without that margin the cursor walks into the last visible row and
+  /// only then does the list jump, which reads as the list moving rather than you moving.
   #[test]
-  fn the_window_only_moves_once_the_cursor_would_leave_it() {
+  fn the_window_scrolls_a_row_before_the_cursor_reaches_the_edge() {
     let list = digits(10);
-    assert_eq!(visible(list, 3), ["● 0", "○ 1", "○ 2"]);
-
-    list.on_key(press(KeyCode::Down));
-    list.on_key(press(KeyCode::Down));
     assert_eq!(
       visible(list, 3),
-      ["○ 0", "○ 1", "● 2"],
-      "still in view, no scroll"
+      ["● 0", "○ 1", "○ 2"],
+      "at the top there is no context"
     );
 
     list.on_key(press(KeyCode::Down));
     assert_eq!(
       visible(list, 3),
-      ["○ 1", "○ 2", "● 3"],
-      "now it scrolls, by one"
+      ["○ 0", "● 1", "○ 2"],
+      "a row of context below, so nothing has to move yet"
+    );
+
+    list.on_key(press(KeyCode::Down));
+    assert_eq!(
+      visible(list, 3),
+      ["○ 1", "● 2", "○ 3"],
+      "one more and the window follows, keeping the row below in sight"
     );
   }
 

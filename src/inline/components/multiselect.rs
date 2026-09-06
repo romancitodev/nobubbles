@@ -14,6 +14,8 @@ use crate::{
 pub struct MultiSelect<'a> {
   prompt: &'a str,
   options: Vec<Cow<'static, str>>,
+  /// Asides, by option index.
+  notes: Vec<(usize, Cow<'static, str>)>,
   max_rows: Option<u16>,
   check: Option<Validator<'a>>,
 }
@@ -23,6 +25,7 @@ pub fn multiselect(prompt: &str) -> MultiSelect<'_> {
   MultiSelect {
     prompt,
     options: Vec::new(),
+    notes: Vec::new(),
     max_rows: None,
     check: None,
   }
@@ -36,6 +39,13 @@ impl<'a> MultiSelect<'a> {
       options: options.into_iter().map(Into::into).collect(),
       ..self
     }
+  }
+
+  /// An aside for one option, shown only while the cursor is on it.
+  #[must_use]
+  pub fn note(mut self, at: usize, text: impl Into<Cow<'static, str>>) -> Self {
+    self.notes.push((at, text.into()));
+    self
   }
 
   /// Shows at most `rows` options at a time, scrolling to keep the cursor in view.
@@ -65,6 +75,9 @@ impl<'a> MultiSelect<'a> {
     let mut list = Widget::new(self.options);
     if let Some(rows) = self.max_rows {
       list = list.max_rows(rows);
+    }
+    for (at, note) in self.notes {
+      list = list.note(at, note);
     }
 
     let check: Check<'_> = self.check.as_deref().unwrap_or(&always_ok);

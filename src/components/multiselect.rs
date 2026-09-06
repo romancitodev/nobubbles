@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
   text::{Line, Span},
   widgets::{Paragraph, Widget},
@@ -9,8 +9,13 @@ use ratatui::{
 use crate::{
   components::Render,
   signals::{Signal, signal},
-  style::{Color, Style},
+  style::{Style, palette},
 };
+
+/// Rows of context kept past the cursor, so the list scrolls *before* the cursor reaches the
+/// edge. Without it the cursor walks into the last visible row and the list only then jumps,
+/// which reads as the list moving on its own rather than as you moving through it.
+const MARGIN: usize = 1;
 
 /// The painted parts of a [`MultiSelect`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -25,6 +30,8 @@ pub struct MultiSelectStyle {
   pub inactive: Style,
   /// A group heading, which is a row you can't tick.
   pub header: Style,
+  /// The aside on the row under the cursor.
+  pub note: Style,
   /// Most rows drawn at once. `None` draws the whole list, however long it is.
   pub max_rows: Option<u16>,
 }
@@ -34,10 +41,11 @@ impl Default for MultiSelectStyle {
     Self {
       checked_symbol: "◼",
       unchecked_symbol: "◻",
-      checked: Style::new().fg(Color::Green),
-      cursor: Style::new().fg(Color::Cyan),
-      inactive: Style::new().dim(),
-      header: Style::new().bold(),
+      checked: Style::new().fg(palette::GREEN),
+      cursor: Style::new().fg(palette::MAUVE),
+      inactive: Style::new().fg(palette::OVERLAY1),
+      header: Style::new().fg(palette::LAVENDER).bold(),
+      note: Style::new().fg(palette::OVERLAY0).italic(),
       max_rows: None,
     }
   }
@@ -60,6 +68,8 @@ pub struct MultiSelect {
   checked: Signal<Vec<bool>>,
   /// Rows that are headings: the cursor jumps over them and space ignores them.
   headers: Signal<Vec<bool>>,
+  /// One per option, empty where there is none. Only the row under the cursor shows its own.
+  notes: Signal<Vec<Cow<'static, str>>>,
   cursor: Signal<usize>,
   /// First row of the window into `options`. Only moves when the cursor would leave it.
   offset: Signal<usize>,
@@ -72,11 +82,29 @@ impl MultiSelect {
     Self {
       checked: signal(vec![false; options.len()]),
       headers: signal(vec![false; options.len()]),
+      notes: signal(Vec::new()),
       options: signal(options),
       cursor: signal(0),
       offset: signal(0),
       style: signal(MultiSelectStyle::default()),
     }
+  }
+
+  /// An aside for one option, shown only while the cursor is on it.
+  ///
+  /// ```text
+  /// ◻ bun (recommended)
+  /// ◻ pnpm
+  /// ```
+  #[must_use]
+  pub fn note(self, at: usize, text: impl Into<Cow<'static, str>>) -> Self {
+    self.notes.update(|notes| {
+      if notes.len() <= at {
+        notes.resize(at + 1, Cow::Borrowed(""));
+      }
+      notes[at] = text.into();
+    });
+    self
   }
 
   /// Marks rows as headings: drawn without a box, skipped by the cursor, deaf to space.
@@ -97,6 +125,15 @@ impl MultiSelect {
       self.step(1);
     }
     self
+  }
+
+  /// The nearest heading at or above `at`, if the list has any.
+  fn heading_above(&self, at: usize) -> Option<usize> {
+    self.headers.with_ref(|headers| {
+      (0..=at)
+        .rev()
+        .find(|&row| headers.get(row).copied().unwrap_or(false))
+    })
   }
 
   /// Whether row `at` is a heading. Out of range counts as one, so nothing lands there.
@@ -149,15 +186,25 @@ impl MultiSelect {
     let last_offset = len.saturating_sub(rows);
 
     self.offset.update(|offset| {
-      if cursor < *offset {
-        // Includes wrapping from the top: the cursor lands on the last row and the window
-        // jumps down with it.
-        *offset = cursor;
-      } else if cursor >= *offset + rows {
-        *offset = cursor + 1 - rows;
+      // The margin is dropped rather than honoured when the window is too small to hold it.
+      let margin = MARGIN.min(rows.saturating_sub(1) / 2);
+
+      if cursor < offset.saturating_add(margin) {
+        *offset = cursor.saturating_sub(margin);
+      } else if cursor + margin >= *offset + rows {
+        *offset = (cursor + margin + 1).saturating_sub(rows);
       }
       *offset = (*offset).min(last_offset);
     });
+
+    // Then pull the window back up to the heading, whenever the group fits inside it. A
+    // window full of options with no heading over them says nothing about what they are
+    // under, which is the whole reason the groups exist.
+    if let Some(head) = self.heading_above(cursor)
+      && cursor - head < rows
+    {
+      self.offset.update(|offset| *offset = (*offset).min(head));
+    }
   }
 
   /// The rows currently on screen, as a range into `options`.
@@ -203,8 +250,35 @@ impl MultiSelect {
         }
         true
       }
+      KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        self.toggle_all();
+        true
+      }
       _ => false,
     }
+  }
+
+  /// Ticks everything, or unticks it when everything is already ticked.
+  ///
+  /// Headings are left alone: they have no box. A list that is entirely headings has nothing
+  /// to tick, so `all` starts true and the first press would untick nothing — harmless.
+  fn toggle_all(&self) {
+    let headers = self.headers.get();
+    let all = self.checked.with_ref(|checked| {
+      checked
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| !headers.get(*at).copied().unwrap_or(false))
+        .all(|(_, ticked)| *ticked)
+    });
+
+    self.checked.update(|checked| {
+      for (at, row) in checked.iter_mut().enumerate() {
+        if !headers.get(at).copied().unwrap_or(false) {
+          *row = !all;
+        }
+      }
+    });
   }
 
   /// Where the cursor sits.
@@ -247,18 +321,53 @@ impl MultiSelect {
   }
 }
 
+/// Columns the collapsed answer gets: the terminal, less the rail and a little slack.
+fn budget() -> u16 {
+  crossterm::terminal::size()
+    .map_or(80, |(columns, _)| columns)
+    .saturating_sub(8)
+}
+
+/// As many picks as fit on one line, then how many were left out.
+///
+/// One always shows, even when it doesn't fit: a line reading only `+24 more` says nothing
+/// about what was picked.
+fn summarise(picked: &[Cow<'static, str>], budget: u16) -> String {
+  let tail = crate::rimel::width_of(&format!(", +{} more", picked.len()));
+  let mut width = 0;
+  let mut shown = 0;
+
+  for (at, item) in picked.iter().enumerate() {
+    let step = crate::rimel::width_of(item) + if at == 0 { 0 } else { 2 };
+    if at > 0 && width + step + tail > budget {
+      break;
+    }
+    width += step;
+    shown += 1;
+  }
+
+  if shown == picked.len() {
+    return picked.join(", ");
+  }
+  format!(
+    "{}, +{} more",
+    picked[..shown].join(", "),
+    picked.len() - shown
+  )
+}
+
 impl crate::components::Ask for MultiSelect {
   fn answer(&self) -> String {
     let picked = self.values();
     if picked.is_empty() {
       "none".to_owned()
     } else {
-      picked.join(", ")
+      summarise(&picked, budget())
     }
   }
 
   fn controls(&self) -> &'static str {
-    "↑↓ to move · space to toggle · enter to submit"
+    "↑↓ to move · space to toggle · ctrl+a for all · enter to submit"
   }
 }
 
@@ -272,6 +381,8 @@ impl Render for MultiSelect {
     let style = self.style.get();
     let checked = self.checked.get();
     let window = self.window();
+
+    let notes = self.notes.get();
 
     let lines: Vec<Line> = self.options.with_ref(|options| {
       options
@@ -304,7 +415,13 @@ impl Render for MultiSelect {
             Span::styled(format!(" {option}"), style.inactive)
           };
 
-          Line::from(vec![Span::styled(symbol, box_style), label])
+          let mut spans = vec![Span::styled(symbol, box_style), label];
+          if i == cursor
+            && let Some(note) = notes.get(i).filter(|note| !note.is_empty())
+          {
+            spans.push(Span::styled(format!(" {note}"), style.note));
+          }
+          Line::from(spans)
         })
         .collect()
     });
@@ -319,6 +436,32 @@ mod tests {
 
   fn press(code: KeyCode) -> KeyEvent {
     KeyEvent::from(code)
+  }
+
+  /// Ctrl+A is a toggle, not a one-way switch, and it never touches a heading.
+  #[test]
+  fn ctrl_a_ticks_everything_and_then_unticks_it() {
+    let list = MultiSelect::new(["Quality", "eslint", "prettier"]).headers([0]);
+    let all = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+
+    assert!(list.on_key(all));
+    assert_eq!(list.selected(), vec![1, 2]);
+
+    assert!(list.on_key(all));
+    assert_eq!(list.selected(), Vec::<usize>::new());
+  }
+
+  #[test]
+  fn the_answer_keeps_what_fits_and_counts_the_rest() {
+    let picked: Vec<Cow<'static, str>> = ["alpha", "beta", "gamma", "delta"]
+      .into_iter()
+      .map(Cow::Borrowed)
+      .collect();
+
+    assert_eq!(summarise(&picked, 80), "alpha, beta, gamma, delta");
+    assert_eq!(summarise(&picked, 24), "alpha, beta, +2 more");
+    // Under any budget at all, one pick survives.
+    assert_eq!(summarise(&picked, 1), "alpha, +3 more");
   }
 
   #[test]
@@ -385,6 +528,60 @@ mod tests {
     assert_eq!(list.rows(), vec![1], "and only the option counts as a row");
   }
 
+  /// The heading of the group you are standing in stays on screen. Without this the window
+  /// scrolls past it and you are left looking at options with nothing saying what they are
+  /// under, which is the only reason the groups exist.
+  #[test]
+  fn the_group_heading_stays_in_view_while_you_are_under_it() {
+    // 0 Quality, 1 eslint, 2 prettier, 3 Testing, 4 vitest, 5 playwright,
+    // 6 Tooling, 7 husky, 8 lint-staged
+    let rows = [
+      "Quality",
+      "eslint",
+      "prettier",
+      "Testing",
+      "vitest",
+      "playwright",
+      "Tooling",
+      "husky",
+      "lint-staged",
+    ];
+    let list = MultiSelect::new(rows).max_rows(6).headers([0, 3, 6]);
+
+    assert!(
+      list.window().contains(&0),
+      "Quality is in sight from the start"
+    );
+
+    // Down to `vitest`, which is under Testing. Two steps, because row 3 is a heading and
+    // the cursor goes over it.
+    for _ in 0..2 {
+      list.on_key(press(KeyCode::Down));
+    }
+    assert_eq!(list.cursor(), 4);
+    assert!(
+      list.window().contains(&3),
+      "Testing came along with its options"
+    );
+
+    // Down to `lint-staged`, the last row, under Tooling.
+    for _ in 0..3 {
+      list.on_key(press(KeyCode::Down));
+    }
+    assert_eq!(list.cursor(), 8);
+    assert!(list.window().contains(&6), "and so did Tooling");
+
+    // All the way back up to `eslint`, under Quality.
+    for _ in 0..5 {
+      list.on_key(press(KeyCode::Up));
+    }
+    assert_eq!(list.cursor(), 1);
+    assert!(
+      list.window().contains(&0),
+      "Quality is back, not scrolled off"
+    );
+  }
+
   #[test]
   fn enter_is_left_for_the_caller() {
     let list = MultiSelect::new(["one"]);
@@ -399,7 +596,11 @@ mod tests {
     for _ in 0..3 {
       list.on_key(press(KeyCode::Down));
     }
-    assert_eq!(list.window(), 1..4, "scrolled by one, the least it could");
+    assert_eq!(
+      list.window(),
+      2..5,
+      "scrolled, keeping a row of context below"
+    );
 
     list.on_key(press(KeyCode::Up));
     list.on_key(press(KeyCode::Up));
