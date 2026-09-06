@@ -64,7 +64,7 @@ impl Input {
   /// A fixed-width mask, not one dot per grapheme: matching the real length on screen is
   /// exactly the kind of leak masking is supposed to prevent (shoulder-surfing, screen
   /// recordings). Empty stays empty, so the placeholder still shows before anything's typed.
-  const MASK_WIDTH: usize = 12;
+  const MASK_WIDTH: usize = 24;
 
   /// What to draw: the value, or a mask that says nothing about how long it really is.
   fn shown(&self) -> String {
@@ -344,22 +344,28 @@ impl Render for Input {
   fn render(self, area: super::Rect, buf: &mut super::Buffer<'_>) {
     let value = self.shown();
     let cursor = self.cursor.get();
-    let typed: String = value.graphemes(true).take(cursor).collect();
 
-    // The row is how many newlines the cursor is past; the column is the width of what's
-    // left on the current line. Columns and not graphemes, because a wide glyph takes two
-    // cells and the caret has to clear both. `Span::width` is the measure ratatui lays the
-    // text out with.
-    let row = u16::try_from(typed.matches('\n').count()).unwrap_or(u16::MAX);
-    let current = typed.rsplit('\n').next().unwrap_or("");
-    let column = u16::try_from(Span::raw(current).width()).unwrap_or(u16::MAX);
+    // A masked field's caret would be the last leak left: its position tracks the real
+    // length just as precisely as one dot per grapheme did. Nobody sets the cursor here, so
+    // it draws hidden (see `Buffer::set_cursor`).
+    if !self.masked.get() {
+      let typed: String = value.graphemes(true).take(cursor).collect();
 
-    // ponytail: no horizontal scrolling, so a line wider than the area pins the caret at the
-    // edge. Windowing the value is the same job as `Select::max_rows`, on the other axis.
-    buf.set_cursor(
-      area.x() + column.min(area.width().saturating_sub(1)),
-      area.y() + row.min(area.height().saturating_sub(1)),
-    );
+      // The row is how many newlines the cursor is past; the column is the width of what's
+      // left on the current line. Columns and not graphemes, because a wide glyph takes two
+      // cells and the caret has to clear both. `Span::width` is the measure ratatui lays the
+      // text out with.
+      let row = u16::try_from(typed.matches('\n').count()).unwrap_or(u16::MAX);
+      let current = typed.rsplit('\n').next().unwrap_or("");
+      let column = u16::try_from(Span::raw(current).width()).unwrap_or(u16::MAX);
+
+      // ponytail: no horizontal scrolling, so a line wider than the area pins the caret at
+      // the edge. Windowing the value is the same job as `Select::max_rows`, on the other axis.
+      buf.set_cursor(
+        area.x() + column.min(area.width().saturating_sub(1)),
+        area.y() + row.min(area.height().saturating_sub(1)),
+      );
+    }
 
     let text: ratatui::text::Text = if value.is_empty()
       && let Some(placeholder) = self.placeholder
@@ -531,6 +537,23 @@ mod tests {
 
     assert_eq!(short, long, "the mask must not grow with the real value");
     assert!(!short.is_empty());
+  }
+
+  /// A caret that moves with real keystrokes leaks the length just as precisely as one dot
+  /// per grapheme would, even over a mask that never changes size.
+  #[test]
+  fn masked_input_never_shows_a_caret() {
+    let field = Input::new().masked();
+    assert_eq!(caret(field), None, "empty, nothing to hide, still no caret");
+
+    for c in "some secret".chars() {
+      let _ = field.on_key(press(KeyCode::Char(c)));
+    }
+    assert_eq!(caret(field), None);
+
+    let _ = field.on_key(press(KeyCode::Left));
+    let _ = field.on_key(press(KeyCode::Backspace));
+    assert_eq!(caret(field), None, "no caret through edits either");
   }
 
   #[test]
