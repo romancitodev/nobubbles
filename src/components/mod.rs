@@ -1,5 +1,3 @@
-use ratatui::widgets::Widget;
-
 pub mod confirm;
 pub mod input;
 pub mod multiselect;
@@ -81,9 +79,12 @@ impl<'b> Buffer<'b> {
   }
 }
 
-/// What a `Component::view()` returns. Implemented for anything that's a
-/// ratatui `Widget`, so built-in widgets get it for free without anyone
-/// outside the crate importing ratatui.
+/// What a `Component::view()` returns.
+///
+/// Implemented per type and **not** blanket-implemented over ratatui's `Widget`: a blanket
+/// over a foreign trait claims every foreign type, and that collides with the one impl the
+/// crate actually wants for a type it does not own — `norimel::Block` (D-020). Widgets in
+/// here reach for `Widget::render` directly, which is what they all did anyway.
 pub trait Render {
   fn render(self, area: Rect, buf: &mut Buffer<'_>);
 
@@ -92,12 +93,6 @@ pub trait Render {
   fn height(&self, width: u16) -> u16 {
     let _ = width;
     1
-  }
-}
-
-impl<W: Widget> Render for W {
-  fn render(self, area: Rect, buf: &mut Buffer<'_>) {
-    Widget::render(self, area.into(), buf.inner_mut());
   }
 }
 
@@ -204,9 +199,10 @@ impl Render for Column {
 
 #[cfg(test)]
 mod tests {
-  use ratatui::{Terminal, backend::TestBackend, widgets::Paragraph};
+  use ratatui::{Terminal, backend::TestBackend};
 
   use super::*;
+  use crate::components::text::Text;
 
   #[test]
   fn column_macro_expands_to_chained_children() {
@@ -217,7 +213,7 @@ mod tests {
       .draw(|frame| {
         let area = frame.area().into();
         let mut buf = Buffer::from(frame.buffer_mut());
-        column![Paragraph::new("top"), Paragraph::new("bottom")].render(area, &mut buf);
+        column![Text::new("top"), Text::new("bottom")].render(area, &mut buf);
       })
       .unwrap();
 
@@ -231,7 +227,7 @@ mod tests {
 
   #[test]
   fn a_column_collects_from_an_iterator_of_rows() {
-    let rows = ["top", "bottom"].map(Paragraph::new);
+    let rows = ["top", "bottom"].map(Text::new);
     let column: Column = rows.into_iter().collect();
 
     assert_eq!(column.height(10), 2);
@@ -247,8 +243,8 @@ mod tests {
         let area = frame.area().into();
         let mut buf = Buffer::from(frame.buffer_mut());
         Column::new()
-          .child(Paragraph::new("top"))
-          .child(Paragraph::new("bottom"))
+          .child(Text::new("top"))
+          .child(Text::new("bottom"))
           .render(area, &mut buf);
       })
       .unwrap();
