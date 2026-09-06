@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use crate::{
   components::{Buffer, Rect, Render},
+  rimel::Block,
   style::{Style, palette},
 };
 
@@ -63,13 +64,14 @@ impl PromptState {
 /// ```
 pub struct Prompt<R> {
   state: PromptState,
-  title: Cow<'static, str>,
+  /// A block and not a string, so a title can carry its own colours.
+  title: Block,
   body: R,
   hint: Option<Cow<'static, str>>,
 }
 
 impl<R> Prompt<R> {
-  pub fn new(state: PromptState, title: impl Into<Cow<'static, str>>, body: R) -> Self {
+  pub fn new(state: PromptState, title: impl Into<Block>, body: R) -> Self {
     Self {
       state,
       title: title.into(),
@@ -111,12 +113,15 @@ impl<R: Render> Render for Prompt<R> {
       // Everything on the rail is painted by hand: it's one column of glyphs, not a widget.
       let raw = buf.inner_mut();
       raw.set_string(area.x, area.y, marker, marker_style);
-      raw.set_string(
-        area.x + GUTTER,
-        area.y,
-        self.title.as_ref(),
-        ratatui::style::Style::default(),
-      );
+
+      // Only the first row: a title is one line, and anything below it would land on the body.
+      crate::rimel::keep_awake(&self.title);
+      for (x, row, text, style) in self.title.runs() {
+        if row == 0 {
+          let style: ratatui::style::Style = style.into();
+          raw.set_string(area.x + GUTTER + x, area.y, text, style);
+        }
+      }
 
       for row in 1..=body_height {
         if row < area.height {

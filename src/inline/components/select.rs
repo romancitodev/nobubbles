@@ -4,6 +4,7 @@ use std::iter::once;
 use eyre::Result;
 
 use crate::{
+  rimel::Block,
   components::select::Select as Widget,
   inline::components::{always_ok, ask},
 };
@@ -20,8 +21,8 @@ use crate::{
 /// let kind = inline::select("Type").items(["feat", "fix"]).strict().ask()?;  // usize
 /// # Ok::<(), eyre::Report>(())
 /// ```
-pub struct Select<'a> {
-  prompt: &'a str,
+pub struct Select {
+  prompt: Block,
   options: Vec<Cow<'static, str>>,
   /// Asides, by option index. The skip row shifts them, so they are kept apart from the
   /// options until `ask` knows whether there is one.
@@ -32,9 +33,9 @@ pub struct Select<'a> {
 }
 
 /// Opens a single-choice prompt.
-pub fn select(prompt: &str) -> Select<'_> {
+pub fn select(prompt: impl Into<Block>) -> Select {
   Select {
-    prompt,
+    prompt: prompt.into(),
     options: Vec::new(),
     notes: Vec::new(),
     initial: 0,
@@ -43,7 +44,7 @@ pub fn select(prompt: &str) -> Select<'_> {
   }
 }
 
-impl<'a> Select<'a> {
+impl Select {
   /// The options to choose from. Indices into this are what `ask` gives back.
   #[must_use]
   pub fn items(self, options: impl IntoIterator<Item: Into<Cow<'static, str>>>) -> Self {
@@ -101,7 +102,7 @@ impl<'a> Select<'a> {
   ///
   /// Call it last, after the rest of the configuration.
   #[must_use]
-  pub fn strict(self) -> Strict<'a> {
+  pub fn strict(self) -> Strict {
     Strict(self)
   }
 
@@ -122,9 +123,9 @@ impl<'a> Select<'a> {
 }
 
 /// A [`Select`] that will not take no for an answer.
-pub struct Strict<'a>(Select<'a>);
+pub struct Strict(Select);
 
-impl Strict<'_> {
+impl Strict {
   /// Runs it, giving back the index picked.
   ///
   /// # Errors
@@ -148,7 +149,7 @@ fn run(
   notes: impl IntoIterator<Item = (usize, Cow<'static, str>)>,
   initial: usize,
   max_rows: Option<u16>,
-  prompt: &str,
+  prompt: Block,
 ) -> Result<usize> {
   let mut list = Widget::new(items);
   if let Some(rows) = max_rows {

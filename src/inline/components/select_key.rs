@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use eyre::Result;
 
 use crate::{
+  rimel::Block,
   components::select_key::SelectKey as Widget,
   inline::components::{always_ok, ask},
 };
@@ -16,20 +17,20 @@ use crate::{
 ///   .ask()?;
 /// # Ok::<(), eyre::Report>(())
 /// ```
-pub struct SelectKey<'a> {
-  prompt: &'a str,
+pub struct SelectKey {
+  prompt: Block,
   options: Vec<(char, Cow<'static, str>)>,
 }
 
 /// Opens a key-driven prompt.
-pub fn select_key(prompt: &str) -> SelectKey<'_> {
+pub fn select_key(prompt: impl Into<Block>) -> SelectKey {
   SelectKey {
-    prompt,
+    prompt: prompt.into(),
     options: Vec::new(),
   }
 }
 
-impl SelectKey<'_> {
+impl SelectKey {
   /// The keys and what they mean. Indices into this are what `ask` gives back.
   #[must_use]
   pub fn items(

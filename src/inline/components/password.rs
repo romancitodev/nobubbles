@@ -1,20 +1,21 @@
 use eyre::Result;
 
 use crate::{
+  rimel::Block,
   components::input::Input,
   inline::components::{Check, Validator, always_ok, ask},
 };
 
 /// Asks for something secret. Dots on screen, dots in the transcript.
 pub struct Password<'a> {
-  prompt: &'a str,
+  prompt: Block,
   check: Option<Validator<'a>>,
 }
 
 /// Opens a masked text prompt.
-pub fn password(prompt: &str) -> Password<'_> {
+pub fn password(prompt: impl Into<Block>) -> Password<'static> {
   Password {
-    prompt,
+    prompt: prompt.into(),
     check: None,
   }
 }

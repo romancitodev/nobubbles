@@ -1,6 +1,7 @@
 use eyre::Result;
 
 use crate::{
+  rimel::Block,
   components::input::Input,
   inline::components::{Check, Validator, always_ok, ask},
 };
@@ -15,15 +16,15 @@ use crate::{
 /// # Ok::<(), eyre::Report>(())
 /// ```
 pub struct Text<'a> {
-  prompt: &'a str,
+  prompt: Block,
   field: Input,
   check: Option<Validator<'a>>,
 }
 
 /// Opens a text prompt.
-pub fn input(prompt: &str) -> Text<'_> {
+pub fn input(prompt: impl Into<Block>) -> Text<'static> {
   Text {
-    prompt,
+    prompt: prompt.into(),
     field: Input::new(),
     check: None,
   }

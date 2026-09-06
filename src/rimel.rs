@@ -16,12 +16,22 @@ pub use norimel::*;
 
 use crate::components::{Buffer, Rect, Render};
 
+/// An animated block asks for the frame after this one. Without it the loop dozes off on its
+/// idle timeout and the ramp freezes wherever it happened to be.
+pub(crate) fn keep_awake(block: &Block) {
+  if block.is_animated() {
+    crate::signals::redraw();
+  }
+}
+
 impl Render for Block {
   fn height(&self, _: u16) -> u16 {
     self.size().1
   }
 
   fn render(self, area: Rect, buf: &mut Buffer<'_>) {
+    keep_awake(&self);
+
     let right = area.x().saturating_add(area.width());
     let bottom = area.y().saturating_add(area.height());
     let raw = buf.inner_mut();

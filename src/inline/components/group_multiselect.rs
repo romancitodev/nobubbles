@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use eyre::Result;
 
 use crate::{
+  rimel::Block,
   components::multiselect::MultiSelect as Widget,
   inline::components::{Check, Validator, always_ok, ask},
 };
@@ -22,7 +23,7 @@ use crate::{
 /// back count only the options, in the order they were added, so they line up with the same
 /// list flattened by hand.
 pub struct GroupMultiSelect<'a> {
-  prompt: &'a str,
+  prompt: Block,
   rows: Vec<Cow<'static, str>>,
   headings: Vec<usize>,
   max_rows: Option<u16>,
@@ -30,9 +31,9 @@ pub struct GroupMultiSelect<'a> {
 }
 
 /// Opens a grouped multiple-choice prompt.
-pub fn group_multiselect(prompt: &str) -> GroupMultiSelect<'_> {
+pub fn group_multiselect(prompt: impl Into<Block>) -> GroupMultiSelect<'static> {
   GroupMultiSelect {
-    prompt,
+    prompt: prompt.into(),
     rows: Vec::new(),
     headings: Vec::new(),
     max_rows: None,

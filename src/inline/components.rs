@@ -7,6 +7,7 @@ use crate::{
     prompt::{Prompt, PromptState},
     text::Text,
   },
+  rimel::Block,
   signals::{self, signal},
   style::Style,
 };
@@ -38,14 +39,14 @@ pub(crate) fn always_ok(_: &str) -> Result<(), String> {
 }
 
 pub(crate) fn ask<W: Render + Ask + Copy>(
-  title: &str,
+  title: impl Into<Block>,
   widget: W,
   mut on_key: impl FnMut(KeyEvent) -> bool,
   check: Check<'_>,
 ) -> eyre::Result<()> {
   let submitted = signal(false);
   let refused = signal(Option::<String>::None);
-  let title = title.to_owned();
+  let title = title.into();
 
   Inline::run(signals::fps(), |cx| {
     if let Some(key) = cx.key() {

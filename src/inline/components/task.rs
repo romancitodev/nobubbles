@@ -45,7 +45,7 @@ impl Report {
 /// cancelled that way is **not** stopped, it is only stopped being watched: the thread runs
 /// to the end on its own.
 pub fn task<T: Send + 'static>(
-  title: &str,
+  title: impl Into<crate::rimel::Block>,
   work: impl FnOnce(&Report) -> T + Send + 'static,
 ) -> Result<T> {
   let spinner = Progress::new();
@@ -57,7 +57,7 @@ pub fn task<T: Send + 'static>(
     let _ = done.send(value);
   });
 
-  let title = title.to_owned();
+  let title = title.into();
   Inline::run(signals::fps(), |cx| {
     let running = said.drain(|line| spinner.set_label(line));
 

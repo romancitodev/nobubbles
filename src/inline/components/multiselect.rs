@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use eyre::Result;
 
 use crate::{
+  rimel::Block,
   components::multiselect::MultiSelect as Widget,
   inline::components::{Check, Validator, always_ok, ask},
 };
@@ -12,7 +13,7 @@ use crate::{
 /// Arrows move, space ticks, Enter submits. An empty pick is a valid answer unless a
 /// [`MultiSelect::validate`] says otherwise.
 pub struct MultiSelect<'a> {
-  prompt: &'a str,
+  prompt: Block,
   options: Vec<Cow<'static, str>>,
   /// Asides, by option index.
   notes: Vec<(usize, Cow<'static, str>)>,
@@ -21,9 +22,9 @@ pub struct MultiSelect<'a> {
 }
 
 /// Opens a multiple-choice prompt.
-pub fn multiselect(prompt: &str) -> MultiSelect<'_> {
+pub fn multiselect(prompt: impl Into<Block>) -> MultiSelect<'static> {
   MultiSelect {
-    prompt,
+    prompt: prompt.into(),
     options: Vec::new(),
     notes: Vec::new(),
     max_rows: None,
