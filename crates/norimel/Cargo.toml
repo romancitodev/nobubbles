@@ -1,0 +1,19 @@
+[package]
+name = "norimel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+colorgrad = { workspace = true, optional = true }
+crossterm.workspace = true
+ratatui = { workspace = true, optional = true }
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+
+[features]
+default = []
+# Colour ramps: `Ramp`, `Block::gradient`, `Block::animate`. Pulls colorgrad and its phf
+# proc-macros, which is most of what a build of this crate costs.
+gradient = ["dep:colorgrad"]
+# `Color`/`Style` conversions into ratatui's own, for whoever paints into a ratatui buffer.
+ratatui = ["dep:ratatui"]

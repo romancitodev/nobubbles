@@ -9,3 +9,8 @@ pub mod signals;
 pub mod style;
 
 pub mod inline;
+pub mod rimel;
+
+/// Re-exported so `cx.effect` has something to take without a second dependency.
+#[cfg(feature = "fx")]
+pub use tachyonfx;

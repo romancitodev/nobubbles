@@ -1,11 +1,45 @@
+[workspace]
+members = ["crates/*"]
+
+# Versions in one place, so `nobubbles` and `norimel` can never disagree about which crossterm
+# is driving the terminal.
+[workspace.dependencies]
+colorgrad = { version = "0.8.0", default-features = false, features = ["std", "preset"] }
+crossterm = "0.29.0"
+ratatui = { version = "0.30.2", default-features = false }
+unicode-segmentation = "1.13.3"
+unicode-width = "0.2.2"
+
 [package]
 name = "nobubbles"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-compio = { version = "0.17.0", features = ["macros"] }
-crossterm = "0.29.0"
+# Unused, and staying (D-011). Optional so the 67 crates it drags are not the default build.
+compio = { version = "0.17.0", features = ["macros"], optional = true }
+crossterm.workspace = true
 eyre = "0.6"
-ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
-unicode-segmentation = "1.13.3"
+norimel = { path = "crates/norimel", features = ["ratatui"] }
+ratatui = { workspace = true, features = ["crossterm"] }
+tachyonfx = { version = "0.25.1", optional = true }
+unicode-segmentation.workspace = true
+
+[features]
+default = []
+# Everything below, for running the examples: `cargo run --example download --features full`.
+full = ["fx", "gradient"]
+# The reserved async backend (D-011). Nothing uses it yet.
+compio = ["dep:compio"]
+# `Ctx::effect`, over tachyonfx. Pulls bon and prettyplease.
+fx = ["dep:tachyonfx"]
+# rímel's colour ramps. Pulls colorgrad.
+gradient = ["norimel/gradient"]
+
+[[example]]
+name = "download"
+required-features = ["gradient"]
+
+[[example]]
+name = "fx"
+required-features = ["full"]
