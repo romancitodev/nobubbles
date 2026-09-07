@@ -20,6 +20,8 @@ pub struct Input {
   anchor: Signal<Option<usize>>,
   multiline: Signal<bool>,
   masked: Signal<bool>,
+  /// Even more paranoid than `masked`: draws nothing at all, not even the fixed mask.
+  invisible: Signal<bool>,
   /// Shown, muted, only while the value is empty. Never part of the value — `&'static str`
   /// and not owned, since a hint is UI text set once at construction, not user data.
   placeholder: Option<&'static str>,
@@ -39,6 +41,7 @@ impl Input {
       anchor: signal(None),
       multiline: signal(false),
       masked: signal(false),
+      invisible: signal(false),
       placeholder: None,
     }
   }
@@ -54,17 +57,30 @@ impl Input {
   }
 
   /// Draws a dot per grapheme instead of the text, and answers with dots too, so a password
-  /// never reaches the screen or the transcript.
+  /// never reaches the screen or the transcript. The usual password-field look: the dots
+  /// fill in and the caret rides along as you type.
   #[must_use]
   pub fn masked(self) -> Self {
     self.masked.set(true);
     self
   }
 
-  /// What to draw: the value, or one dot per grapheme.
+  /// Past `masked`: draws nothing at all, ever, caret included. `masked`'s dots (and its
+  /// caret) still say how long the value is; this is for the value where that's worth
+  /// hiding too.
+  #[must_use]
+  pub fn invisible(self) -> Self {
+    self.masked.set(true);
+    self.invisible.set(true);
+    self
+  }
+
+  /// What to draw: the value, one dot per grapheme, or nothing at all.
   fn shown(&self) -> String {
     let value = self.value.get();
-    if self.masked.get() {
+    if self.invisible.get() {
+      String::new()
+    } else if self.masked.get() {
       "•".repeat(value.graphemes(true).count())
     } else {
       value
@@ -307,8 +323,16 @@ impl Input {
 }
 
 impl crate::components::Ask for Input {
+  // Unlike `shown()` (what's drawn live, where an empty value gets the dim placeholder
+  // painted over it separately), this is what the *settled* transcript line prints once
+  // answered, so an empty field needs the placeholder folded in here, or it prints nothing.
   fn answer(&self) -> String {
-    self.shown()
+    let shown = self.shown();
+    if shown.is_empty() {
+      self.placeholder.map_or(shown, str::to_owned)
+    } else {
+      shown
+    }
   }
 
   fn controls(&self) -> &'static str {
@@ -336,22 +360,28 @@ impl Render for Input {
   fn render(self, area: super::Rect, buf: &mut super::Buffer<'_>) {
     let value = self.shown();
     let cursor = self.cursor.get();
-    let typed: String = value.graphemes(true).take(cursor).collect();
 
-    // The row is how many newlines the cursor is past; the column is the width of what's
-    // left on the current line. Columns and not graphemes, because a wide glyph takes two
-    // cells and the caret has to clear both. `Span::width` is the measure ratatui lays the
-    // text out with.
-    let row = u16::try_from(typed.matches('\n').count()).unwrap_or(u16::MAX);
-    let current = typed.rsplit('\n').next().unwrap_or("");
-    let column = u16::try_from(Span::raw(current).width()).unwrap_or(u16::MAX);
+    // `invisible` draws nothing at all, caret included: a caret over an empty line would
+    // still say how long the value is. Nobody sets the cursor here, so it draws hidden (see
+    // `Buffer::set_cursor`). `masked` alone keeps the usual moving caret over its dots.
+    if !self.invisible.get() {
+      let typed: String = value.graphemes(true).take(cursor).collect();
 
-    // ponytail: no horizontal scrolling, so a line wider than the area pins the caret at the
-    // edge. Windowing the value is the same job as `Select::max_rows`, on the other axis.
-    buf.set_cursor(
-      area.x() + column.min(area.width().saturating_sub(1)),
-      area.y() + row.min(area.height().saturating_sub(1)),
-    );
+      // The row is how many newlines the cursor is past; the column is the width of what's
+      // left on the current line. Columns and not graphemes, because a wide glyph takes two
+      // cells and the caret has to clear both. `Span::width` is the measure ratatui lays the
+      // text out with.
+      let row = u16::try_from(typed.matches('\n').count()).unwrap_or(u16::MAX);
+      let current = typed.rsplit('\n').next().unwrap_or("");
+      let column = u16::try_from(Span::raw(current).width()).unwrap_or(u16::MAX);
+
+      // ponytail: no horizontal scrolling, so a line wider than the area pins the caret at
+      // the edge. Windowing the value is the same job as `Select::max_rows`, on the other axis.
+      buf.set_cursor(
+        area.x() + column.min(area.width().saturating_sub(1)),
+        area.y() + row.min(area.height().saturating_sub(1)),
+      );
+    }
 
     let text: ratatui::text::Text = if value.is_empty()
       && let Some(placeholder) = self.placeholder
@@ -504,6 +534,58 @@ mod tests {
     let _ = field.on_key(press(KeyCode::Char('x')));
     assert_eq!(rendered_text(field, 20), "x", "typing replaces it");
     assert_eq!(field.value(), "x", "and it was never the value to begin with");
+  }
+
+  #[test]
+  fn an_empty_answer_falls_back_to_the_placeholder() {
+    use crate::components::Ask;
+
+    let field = Input::new().placeholder("[skipped]");
+    assert_eq!(
+      field.answer(),
+      "[skipped]",
+      "the settled transcript line would otherwise print nothing for an empty field"
+    );
+
+    let _ = field.on_key(press(KeyCode::Char('x')));
+    assert_eq!(field.answer(), "x", "a real value always wins");
+
+    let no_placeholder = Input::new();
+    assert_eq!(no_placeholder.answer(), "", "nothing to fall back to, so still empty");
+  }
+
+  #[test]
+  fn masked_input_draws_one_dot_per_grapheme() {
+    let field = Input::new().masked();
+    assert_eq!(rendered_text(field, 20), "");
+
+    let _ = field.on_key(press(KeyCode::Char('h')));
+    let _ = field.on_key(press(KeyCode::Char('i')));
+    assert_eq!(rendered_text(field, 20), "••", "the usual password look: dots fill in as you type");
+    assert_eq!(field.value(), "hi", "but the real value still submits");
+  }
+
+  #[test]
+  fn masked_input_still_shows_the_caret() {
+    let field = Input::new().masked();
+    let _ = field.on_key(press(KeyCode::Char('h')));
+    let _ = field.on_key(press(KeyCode::Char('i')));
+    assert_eq!(caret(field), Some((5, 1)), "the caret rides the dots same as plain text");
+  }
+
+  #[test]
+  fn invisible_input_renders_nothing_but_still_holds_the_real_value() {
+    let field = Input::new().invisible();
+    assert_eq!(rendered_text(field, 20), "");
+    assert_eq!(caret(field), None);
+
+    for c in "a whole secret sentence".chars() {
+      let _ = field.on_key(press(KeyCode::Char(c)));
+    }
+
+    assert_eq!(rendered_text(field, 20), "", "not even a mask shows up");
+    assert_eq!(caret(field), None);
+    assert_eq!(field.value(), "a whole secret sentence", "the real value still submits");
   }
 
   #[test]

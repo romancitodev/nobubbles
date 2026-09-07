@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 use crate::{
-  components::{Render, input::Input},
+  components::{Ask, Render, input::Input},
   signals::{Signal, signal},
   style::{Style, palette},
 };
@@ -16,6 +16,10 @@ use crate::{
 /// The painted parts of an [`Autocomplete`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct AutocompleteStyle {
+  /// The marker on the suggestion the arrows are on.
+  pub active_symbol: &'static str,
+  /// The marker on every other suggestion, same width so the list doesn't jitter.
+  pub inactive_symbol: &'static str,
   /// The suggestion the arrows are on.
   pub highlighted: Style,
   /// Every other suggestion.
@@ -27,6 +31,8 @@ pub struct AutocompleteStyle {
 impl Default for AutocompleteStyle {
   fn default() -> Self {
     Self {
+      active_symbol: "❯",
+      inactive_symbol: "·",
       highlighted: Style::new().fg(palette::BASE).bg(palette::MAUVE),
       inactive: Style::new().fg(palette::OVERLAY1),
       note: Style::new().fg(palette::OVERLAY0).italic(),
@@ -186,8 +192,11 @@ impl Autocomplete {
 }
 
 impl crate::components::Ask for Autocomplete {
+  // `self.input.answer()` and not `self.value()`: the settled transcript line needs the same
+  // empty-falls-back-to-placeholder behavior `Input` already has, or an untouched field with
+  // a "none"-style placeholder prints nothing once submitted.
   fn answer(&self) -> String {
-    self.value()
+    self.input.answer()
   }
 
   fn controls(&self) -> &'static str {
@@ -227,8 +236,12 @@ impl Render for Autocomplete {
           let option = &opts[at];
           let on = Some(pos) == highlighted;
           let row_style = if on { style.highlighted } else { style.inactive };
+          let symbol = if on { style.active_symbol } else { style.inactive_symbol };
 
-          let mut spans = vec![Span::styled(option.to_string(), row_style)];
+          let mut spans = vec![
+            Span::styled(symbol, row_style),
+            Span::styled(format!(" {option}"), row_style),
+          ];
           if on && let Some(note) = notes.get(at).filter(|note| !note.is_empty()) {
             spans.push(Span::styled(format!(" {note}"), style.note));
           }
@@ -287,7 +300,7 @@ mod tests {
       assert!(field.on_key(press(KeyCode::Char(c))));
     }
 
-    assert_eq!(wide(field, 2, 20), ["de", "deno"]);
+    assert_eq!(wide(field, 2, 20), ["de", "· deno"]);
   }
 
   #[test]
@@ -298,7 +311,11 @@ mod tests {
     }
 
     assert!(field.on_key(press(KeyCode::Down)));
-    assert_eq!(wide(field, 3, 20), ["e", "deno", "node"], "deno is highlighted first");
+    assert_eq!(
+      wide(field, 3, 20),
+      ["e", "❯ deno", "· node"],
+      "deno is highlighted first"
+    );
 
     // Not consumed, so `ask` reads it as submit — but the field's own value has to change
     // first, or the answer would just be "e".

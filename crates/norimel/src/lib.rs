@@ -103,7 +103,7 @@ use unicode_width::UnicodeWidthStr;
 
 pub mod style;
 
-pub use style::{Color, Style, palette};
+pub use style::{Color, Style, blend, palette};
 
 /// Re-exported so [`Ramp::new`] has something to take without a second dependency.
 #[cfg(feature = "gradient")]

@@ -63,6 +63,19 @@ pub mod palette {
   pub const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
 }
 
+/// Blends `fg` toward `bg` by `alpha` (`0.0` = fully `bg`, `1.0` = fully `fg`) — real RGB
+/// compositing, not the `dim` attribute's terminal-dependent guess. Only two true colours have
+/// channels to mix; a named 16-colour or `Reset` passes through unchanged.
+#[must_use]
+pub fn blend(fg: Color, bg: Color, alpha: f32) -> Color {
+  let (Color::Rgb(fr, fg_g, fb), Color::Rgb(br, bg_g, bb)) = (fg, bg) else {
+    return fg;
+  };
+  let a = alpha.clamp(0.0, 1.0);
+  let mix = |f: u8, b: u8| (f32::from(b) + (f32::from(f) - f32::from(b)) * a).round() as u8;
+  Color::Rgb(mix(fr, br), mix(fg_g, bg_g), mix(fb, bb))
+}
+
 /// How a piece of text is painted.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Style {
@@ -230,6 +243,22 @@ impl From<Style> for ratatui::style::Style {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn blend_interpolates_between_two_true_colours() {
+    let white = Color::Rgb(255, 255, 255);
+    let black = Color::Rgb(0, 0, 0);
+
+    assert_eq!(blend(white, black, 1.0), white);
+    assert_eq!(blend(white, black, 0.0), black);
+    assert_eq!(blend(white, black, 0.5), Color::Rgb(128, 128, 128));
+  }
+
+  #[test]
+  fn blend_passes_through_colours_with_no_channels_to_mix() {
+    assert_eq!(blend(Color::Red, Color::Rgb(0, 0, 0), 0.5), Color::Red);
+    assert_eq!(blend(Color::Reset, Color::Rgb(0, 0, 0), 0.5), Color::Reset);
+  }
 
   #[test]
   fn builders_stack_onto_one_style() {
