@@ -2,6 +2,9 @@
 name = "norimel"
 version = "0.1.0"
 edition = "2024"
+description = "Styled text blocks for TUI rendering, with colour ramps and ratatui conversions"
+license = "MIT"
+repository = "https://github.com/romancitodev/nobubbles"
 
 [dependencies]
 colorgrad = { workspace = true, optional = true }
