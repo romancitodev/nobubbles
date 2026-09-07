@@ -12,7 +12,7 @@ unicode-width = "0.2.2"
 
 [package]
 name = "nobubbles"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "Reactive TUI for Rust: signals instead of messages, inline and fullscreen"
 license = "MIT"
@@ -24,7 +24,7 @@ compio = { version = "0.17.0", features = ["macros"], optional = true }
 crossterm.workspace = true
 eyre = "0.6"
 fuzzy-matcher = "0.3.7"
-norimel = { path = "crates/norimel", version = "0.1.0", features = ["ratatui"] }
+norimel = { path = "crates/norimel", version = "0.1.1", features = ["ratatui"] }
 ratatui = { workspace = true, features = ["crossterm"] }
 tachyonfx = { version = "0.25.1", optional = true }
 unicode-segmentation.workspace = true
